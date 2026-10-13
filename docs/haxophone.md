@@ -1,0 +1,472 @@
+# Haxophone
+
+NixOS for a Haxophone (digital saxophone HAT) on a Raspberry Pi Zero 2 W:
+512 MB RAM, 4x Cortex-A53, onboard CYW43436 (2.4 GHz Wi-Fi + BT 4.2 on one
+antenna), one OTG-capable micro-USB port. This records the decisions made so
+far.
+
+Until 2026-10-13 the host lived in schlarpc-flake (`hosts/haxophone`, booted
+from nixpkgs' SD image). It moved to this repo with the storage layout
+below; the sections before "Layout" describe that bootstrap.
+
+## Bootstrap (schlarpc-flake hosts/haxophone, 2026-10-12)
+
+nixpkgs' aarch64 SD image module with the mainline kernel (6.18, from
+cache.nixos.org; dwc2 is built in as dual-role, and MAX98357A and bcm2835 I2S
+are modules), built on bagel through aarch64 binfmt. One USB cable to the
+inner "USB" port powers the board and carries the legacy `g_cdc` gadget:
+ECM network (the Zero is 10.68.0.1 and hands the host a DHCP lease with no
+router or DNS) plus ACM serial (`ttyGS0`, autologin). The mini UART
+(`ttyS1`) is a second console. First boot worked: SSH over the gadget at
+10.68.0.1. Only 376 MB of RAM is visible (MemTotal 385004 kB): the firmware's
+GPU memory split and the vc4 KMS driver's CMA take the rest; `gpu_mem=16`
+and dropping vc4 get most of it back. Throwaway: the btrfs/tmpfs layout and the rpi
+kernel (cross-built with ccacheStdenv like schlarpc-flake's hosts/devterm)
+replace it. (The rpi kernel part was later dropped: see "Kernel: mainline".)
+
+Milestone (2026-10-13): playable on NixOS. Mainline kernel, our HAT
+overlay, haxo-rs with patches 0001-0002, deployed with deploy-rs over the
+gadget link. Sound, keys, breath and re-articulation all verified by
+playing it.
+
+## Open issue: the USB gadget data path stalls (2026-10-13)
+
+Twice, a deploy's `nix copy` over the gadget link died: first with g_cdc
+(ECM; sshd reset connections, ping still answered, the ACM console went
+silent), then with the composite gadget (NCM; bagel logged repeated
+`cdc_ncm ... NETDEV WATCHDOG: transmit queue 0 timed out`, then the device
+stopped answering control requests: `can't set config #1, error -110`).
+The board itself stayed up the second time: the hardware watchdog (now on)
+never fired. So it's the dwc2 gadget side stalling under sustained bulk
+traffic, not a kernel hang. An earlier reading of the first incident as a
+hard hang was wrong: that boot's journal ends mid-play simply because
+nothing more was logged.
+
+Next: get in over Wi-Fi (nixos/wifi.nix) while the link is
+stalled and read the kernel log live. Suspects: dwc2 gadget DMA/FIFO
+handling on bcm2835 in mainline, NCM/ECM under load, power on the shared
+USB supply.
+
+## Layout (this repo, 2026-10-13)
+
+What the "Decided" items below turned into. Not yet booted on the board.
+
+- **Partitions** (nixos/disko.nix): GPT, 512 MB FAT at /boot, btrfs for
+  the rest with subvolumes `/nix` and `/persist` (zstd, noatime). The FAT
+  partition is also entry 1 of a hybrid MBR, type 0x0c: the BCM2837 boot
+  ROM is Pi 3 class and reads only MBR. Untested on the board; if the
+  firmware never starts (no activity LED, nothing on the mini UART), this is
+  the first suspect.
+- **Boot chain** (nixos/boot.nix): nixos-hardware's Raspberry Pi firmware
+  module stages the GPU firmware, `u-boot.bin` (nixpkgs' rpi_3 build, which
+  the bootstrap booted with) and config.txt onto /boot on every switch.
+  config.txt is written in full, not on top of nixos-hardware's Raspberry Pi
+  OS defaults: `enable_uart`, `core_freq=250` (the mini UART console),
+  `gpu_mem=16`. U-Boot loads the generation's own device tree (FDTDIR), so
+  the HAT overlay comes from `hardware.deviceTree`, never config.txt.
+  `configurationLimit = 8` generations on the FAT partition.
+- **Root**: tmpfs, 128 MB. preservation (not impermanence; it is what
+  schlarpc-flake's newer hosts use) keeps machine-id, the ed25519 host key
+  (symlinked from the initrd, so agenix can decrypt during activation),
+  /var/lib/{nixos,systemd,bluetooth,haxophone} and /home/schlarpc. Only an
+  ed25519 host key is generated: an RSA one would change on every boot.
+- **Journal**: volatile, 32 MB, so nothing survives a crash. Debug hangs
+  live (over Wi-Fi) or on the UART.
+- **Users**: immutable (`users.mutableUsers = false`); /etc/shadow is
+  rebuilt every boot anyway. schlarpc only, ssh keys from
+  github.com/schlarpc.keys, autologin on the consoles.
+- **Nix**: stock nixpkgs Nix, not Determinate (which the schlarpc-flake
+  hosts get); nothing builds on the board.
+- **Minting** (packages/mint-sd.nix, see README.md): format the card in a
+  reader with the disko CLI, put the host key and machine-id on /persist,
+  then `nixos-install --system` the prebuilt closure. Verified against a
+  loop device on bagel, not yet with a card on the board.
+
+## Decided
+
+- **Storage**: FAT firmware partition holding the kernels (256-512 MB,
+  sized to `configurationLimit` x ~50 MB per generation), btrfs for the rest
+  (zstd, snapshots), tmpfs root with impermanence. No ZFS: RAM, U-Boot cannot
+  read it, and the zfs module would have to be cross-built against linux_rpi.
+- **Memory**: zram instead of SD swap; haxo-rs mlocks itself. Volatile
+  journal capped at 16-32 MB. tmpfs root capped at 64-128 MB.
+- **Bluetooth**: used for performing. The onboard controller is BT 4.2, so
+  LE Audio / LC3 is out (needs 5.2 isochronous channels), and the only USB
+  port is the gadget, so no dongle. Best available is aptX LL or FastStream
+  through PipeWire, which needs a receiver that supports one of them.
+  PipeWire cannot encode aptX Adaptive.
+- **UART**: PL011 stays on Bluetooth (A2DP needs it); serial console on the
+  mini-UART (`enable_uart=1`).
+- **Kernel: mainline** (nixpkgs default, from cache.nixos.org), not the
+  rpi kernel. Verified on the board with 6.18.48: dwc2 gadget, Wi-Fi
+  (brcmfmac, BCM43430/1, firmware 7.45.96), Bluetooth (`hci0` on the PL011,
+  mini-UART console on ttyS1, which is our planned split), and cpufreq-dt
+  600-1000 MHz all work. `linux_rpi02w` (6.12.75) is not cached, so it would
+  be a cross-build after every nixpkgs bump. The one thing it offers is the
+  ready-made `max98357a` config.txt overlay; we write our own device tree
+  overlay instead (`hardware.deviceTree.overlays`). PREEMPT_RT is a config
+  option away on mainline if latency ever needs it.
+- **haxo-rs is ours to change**: our fork schlarpc/haxo-rs (upstream:
+  cardonabits/haxo-rs). See "Packaging haxo-rs".
+
+## Outputs: IEM on the jack and Bluetooth for the crowd, at the same time
+
+The jack feeds the player's in-ear monitors; Bluetooth feeds a speaker for
+the audience. Both play at once (a monitor/front-of-house split, so the
+Bluetooth delay doesn't matter to the player).
+
+Plan: one synth, rendered once by haxo-rs's own ALSA loop on the I2S clock
+via `fluid_synth_process()`. The IEM buffers go straight to ALSA
+`hw:MAX98357A`. The crowd buffers go into a ring buffer (written without
+blocking; drop on overflow), and a PipeWire stream reads them through a
+`rubato` adaptive resampler, with a control loop holding the ring buffer near
+half full to absorb I2S/BT clock drift (the zita-ajbridge / `alsa_out`
+pattern). Use a cheap interpolation mode: the BT codec is lossy anyway.
+
+Why: one soundfont load, one render pass (CPU, not RAM, is the scarce
+resource with a big soundfont plus reverb on the A53), and the IEM thread
+never waits on Bluetooth. Different mixes per output, if wanted later, come
+from `synth.audio-groups` / `synth.effects-groups`: each note on two MIDI
+channels, both reading the same samples, at twice the voice cost (use
+per-channel mono/legato mode instead of global polyphony 1).
+
+Rejected:
+- Two synth instances: double render CPU, and double sample RAM.
+- fluidsynth's JACK driver with `audio.jack.multi=yes` on PipeWire's JACK
+  layer, linking each group to a different sink: no code, but the IEM path
+  shares a graph with the BT sink. Kept as the bench test for the BT chain.
+
+Build order:
+1. IEM only: upstream haxo-rs plus dynamic sample loading, FluidR3 unload,
+   idle mode.
+2. Prove the BT chain (codec, receiver, latency) with the JACK-multi setup.
+3. Replace it with the own-loop bridge.
+4. Second audio group only when different mixes are wanted.
+
+Soundfont memory: `synth.dynamic-sample-loading` (in nixpkgs fluidsynth
+2.5.6) loads a preset's samples only when a channel selects it, so RAM tracks
+the active preset, not the file. Preset switches read from the SD card, so
+switch between songs. SF3 saves disk only; samples are decoded to 16-bit on
+load. nixpkgs' fluidsynth has no PipeWire driver (JACK and PulseAudio only),
+which the own-loop design doesn't need.
+
+## TODO: web UI (listen to the mix, change settings)
+
+A web server on the board, reachable over the USB gadget and Wi-Fi
+(haxophone.local), with:
+- A page that plays the device's audio mix live in the browser. Take it
+  from the own render loop as one more tap, like the Bluetooth bridge (see
+  Outputs): a ring buffer written without blocking, so a slow or vanished
+  listener can never stall the IEM path. Latency matters less here than
+  for the player (listening, recording a take), so encoding (e.g. Opus
+  over WebRTC or WebSocket) is acceptable if the CPU allows it next to the
+  synth.
+- Settings: Wi-Fi networks, plus the instrument settings the key combos
+  reach today (program/soundfont, transpose, volume) and later ones (output
+  levels, backing tracks).
+
+Open questions:
+- Wi-Fi config is now declarative (the agenix `spaceless-wifi` secret,
+  written to iwd at boot). Networks added from the web UI need persistent
+  state on the impermanent layout and must not be overwritten by the
+  declared one.
+- Auth: anyone on the same Wi-Fi could reach it. At least a password, and
+  maybe settings only over the USB link.
+- CPU cost of the server and the encoder, measured against the synth's
+  headroom (see the measurement rule under "Upstream issues").
+
+## HAT audio hardware (from haxo-hw `haxophone001.kicad_sch` netlist)
+
+- J5 "Line Out" (TRS): tip and ring both on MAX98357 OUTP (through ferrite
+  FB1, 220 pF C4 to GND); **sleeve on OUTN, not ground**. Bridge-tied
+  output, both legs biased at about VDD/2.
+- So a grounded input (mixer, powered amp) is only safe while the haxophone
+  is otherwise floating. If its ground also reaches the amp another way
+  (USB to a laptop on the same rig, or a shared supply), OUTN is shorted to
+  ground. Passive wired IEMs are fine.
+- Gain jumper JP1 on GAIN_SLOT: to GND 12 dB, to +5V 6 dB, open 9 dB. Full
+  scale is far too loud for sensitive IEMs; cap the level in software.
+- SD_MODE is on GPIO4 (`CODEC_ENABLE`), and upstream uses
+  `dtoverlay=max98357a,sdmode-pin=4`, so the kernel codec driver turns the
+  amp on and off with the PCM stream. Closing the stream when idle is enough.
+- Upstream provisioning also sets `disable-wifi` and `disable-bt`. We run
+  both radios, so listen for radio noise on the analog output and watch for
+  audio glitches.
+
+## Stock image (as found on the Samsung PRO Endurance 128 GB, 2026-10-12)
+
+Raspbian 11 (bullseye), kernel 6.1.21, `haxo001` built 2023-12-21. Useful as
+the reference for what the hardware expects:
+- `config.txt`: `dtparam=i2c_arm=on`, `i2c_arm_baudrate=400000`,
+  `dtoverlay=max98357a,sdmode-pin=4`, `dtoverlay=dwc2`, `enable_uart=1`,
+  `disable-wifi`, `disable-bt`, `vc4-kms-v3d`, `disable_overscan=1`.
+- `cmdline.txt`: `boot=overlay` (read-only overlayfs root),
+  `console=serial0,115200 console=tty1`.
+- `haxo.service`: root, group audio, `Type=idle`, `Restart=always`,
+  `ExecStartPre=create_midi_gadget.sh`, then `haxo001 --notemap-file
+  /usr/share/haxo/notemap.json --prog-number 66 --sf2-file
+  /usr/share/sounds/sf2/TimGM6mb.sf2` (6 MB GM soundfont; program 66 is
+  GM tenor sax, zero-based).
+- `/usr/share/sounds/sf2` also holds FluidR3_GM (148 MB), Tenor_Sax (47 KB)
+  and Mister_Tenor_Sax (8.7 MB, added by us).
+- 1.6 GB of on-device Rust toolchain under /home/pi; rootfs 96% full.
+- This card fails every data read in the Realtek 0bda:0306 USB3 reader on
+  bagel ("Hardware Error" sense) but reads fine in an SMI 090c:3350 (USB 2).
+
+## SD card: Samsung PRO Endurance 128 GB (U3, V30)
+
+Tested 2026-10-12 on bagel through a SanDisk SDDR-C531 (USB 3,
+usb-storage, so no command queueing; QD16 matches QD1). The card was wiped
+in the process.
+- `f3probe --destructive`: genuine, the full 128 GB (119.38 GiB) is real.
+- fio, `direct=1`, 30 s per test over an 8 GiB region:
+
+| Test | Result |
+|---|---|
+| Sequential read, 1 MiB | 53.7 MB/s |
+| Sequential write, 1 MiB | 49.9 MB/s |
+| Random read, 4K QD1 | 2668 IOPS (0.37 ms mean) |
+| Random write, 4K QD1 | 1871 IOPS (0.53 ms mean, p99 3.5 ms) |
+
+Random write sits just under the A2 class floor (2000 IOPS), far above A1
+(500), and several times a typical non-endurance card; that is the number
+that sets deploy speed. Sequential is capped by the reader's bus mode and doesn't
+matter: the Zero 2 W's SD host runs well below 50 MB/s anyway.
+
+## haxo-rs as it is upstream
+
+- Embeds fluidsynth as a library: `audio.driver=alsa`, 3 x 64-frame periods,
+  RT prio 99, opens `hw:N` of the card named `MAX98357A` directly. There is
+  no separate fluidsynth service.
+- MIDI out (feature `midi`) goes through midir to ALSA sequencer ports; the
+  f_midi gadget appears as one, so USB MIDI needs no PipeWire bridging. With
+  more than one seq output port it picks by index, so other seq clients
+  (e.g. PipeWire's bridge) change its choice.
+- Loads FluidR3_GM.sf2 (~140 MB) for the startup jingle and never unloads it.
+- Main loop is a fixed 500 Hz tick (`TICK_USECS = 2000`): key matrix scan
+  (8 rows, 10 us settle sleeps each) plus an I2C pressure read, forever,
+  whether or not anyone is playing. The audio driver also runs continuously.
+- Feature `instrumentation` toggles UART RXD, so it conflicts with a UART
+  console.
+
+## Packaging haxo-rs
+
+`packages/haxo-rs`, built with crane from the source-only `haxo-rs` flake
+input, which is our fork `github:schlarpc/haxo-rs` (clone in
+`~/src/haxo-rs`, with cardonabits as the `upstream` remote). Our changes are
+commits on the fork's `main`; `nix flake update haxo-rs` picks them up. To
+test unpushed work: `--override-input haxo-rs git+file:///home/schlarpc/src/haxo-rs`.
+Pull upstream fixes by merging or cherry-picking from `upstream/main`.
+crane vendors from the fork's Cargo.lock at eval time, so there is no
+cargoHash and no import-from-derivation. Built with `--features midi`.
+
+Until 2026-10-13 the changes were `git format-patch` files in
+`packages/haxo-rs/patches` plus a replacement Cargo.lock; they are now the
+fork's first commits (cc0c336 through 9e06de6, source tree verified
+identical to the old patched source).
+
+## Upstream issues, diagnosed (2026-10-13)
+
+Read from the code and the issue threads; nothing here is tested on the
+board yet. Nothing was posted upstream.
+
+These are hypotheses until proven. Each fix must come with: the failure
+reproduced on the board first (if it can't be reproduced, the diagnosis is
+wrong), a measurement before and after, and the numbers recorded here.
+Ways to measure each:
+- #24: fluidsynth's reported period/buffer sizes, plus key-to-sound
+  latency measured end to end (e.g. the `instrumentation` noteon pin, or a
+  key-click mic and the line out on two scope or audio-interface channels).
+  Compare against plain `hw:` and count xruns while a track plays under
+  load.
+- #29: Ekolide's `stereo.sf2` (programs 3, 5, 6, 7) on the board, plus
+  `fluid_synth_get_active_voice_count` per note, before and after.
+- #41: message rate and queue depth on the MIDI port while breathing, and
+  note-on latency over BLE with fast passages, before and after the cap.
+- #26: `counting.sf2` from the issue, stepping past its last preset.
+- Main loop: tick jitter (e.g. the `busy` instrumentation pin, or logged
+  tick intervals) under Wi-Fi and USB load, before and after.
+
+- **#24, backing tracks: dmix latency is dmix's defaults.** Both period
+  sizes in the thread match ALSA's dmix defaults exactly. `plug:dmix` gave
+  940 frames: dmix defaults to `rate 48000`, `period_size 1024`, and 1024
+  frames at 48 kHz is 940 at fluidsynth's 44.1 kHz. The hand-written
+  `dmix0` set the rate but no period, so dmix used its 125 ms period time
+  (44100 x 0.125 = 5513). dmix sets the hardware period, so fluidsynth's
+  64-frame request is ignored. Setting `period_size 64`, `buffer_size 192`,
+  `rate 48000` in the dmix slave (and `synth.sample-rate` 48000 in
+  fluidsynth) should restore the latency; the card already takes 64-frame
+  periods from haxo directly. Untested catch: with
+  `defaults.pcm.dmix.max_periods 0` every dmix client gets the same tiny
+  buffer, so a non-realtime `aplay` would drop out under load (only the
+  track, never the sax). Fine as an experiment; the real fix is mixing the
+  track into our own render loop (see Outputs), decoded into a large ring
+  buffer by a normal thread.
+- **#29, stereo: most symptoms are `set_polyphony(1)`.** The silent right
+  channel is the hardware: SD_MODE is driven straight from GPIO4 at 3.3 V
+  with no resistor, which puts the MAX98357A in left-only mode. Summing in
+  software adds no buffering (a `plug` with `ttable { 0.0 0.5 1.0 0.5 }`,
+  or `L = (L+R)/2` in our own loop). But "program 3 randomly picks one
+  sound" and "programs 6/7 mostly silent" come from `synth.rs` setting
+  polyphony to 1 for monophony: a layered preset or a stereo sample pair
+  needs two voices, fluidsynth keeps one, and when it keeps the right-hand
+  voice nothing is heard. `main.rs` already sends note-off before every
+  note-on, so the limit only does harm. Fix: polyphony 8-16 plus
+  fluidsynth's per-channel mono/legato mode (`fluid_synth_set_basic_channel`,
+  not wrapped by the rust-fluidsynth binding, so declare it `extern`).
+- **#41, BT MIDI: the latency is a backlog.** `main.rs` sends CC#2 (breath)
+  on every pressure change at the 500 Hz tick, up to ~500 messages/s, while
+  a BLE link sends a packet every 15-50 ms. The queue grows without bound,
+  so latency climbs to seconds and worsens with faster playing, exactly as
+  reported; "publish only the most recent message" helped because it
+  dropped stale messages. Fix: cap breath CC at ~100 Hz (or send only on a
+  change of a few counts), never drop note on/off; then expect roughly
+  10-20 ms. BlueZ's MIDI plugin is central-only (it connects out to BLE MIDI
+  devices); for phones and DAWs to connect to the Haxophone it needs its own
+  BLE MIDI GATT service, e.g. with the `bluer` crate.
+- **#26, program change falls through to the default soundfont.** FluidR3
+  is loaded first for the jingle and never unloaded; presets missing from
+  the user's soundfont resolve to it. Unloading it (`sfunload` is wrapped)
+  fixes this; stepping through the presets that exist, instead of clamping
+  to 0-127, fixes the rest.
+- **Main loop scheduling.** The loop runs at normal priority, so Wi-Fi or
+  USB load can delay note onsets; `beep()` and `change_program()` also
+  sleep 100 ms inside it. Nothing calls `mlockall` (the Memory decision
+  above is a plan, not current behavior).
+
+## Patches to make
+
+- Polyphony 8-16 with per-channel mono/legato mode instead of
+  `set_polyphony(1)` (see #29 above).
+- Rate-limit breath CC#2 on MIDI out (see #41 above).
+- Main loop at realtime priority below the audio thread, `mlockall`, and no
+  sleeps in the loop.
+- Own render loop with the BT bridge (see Outputs). PipeWire must never
+  open the I2S card. Sum L+R to the left channel there, and mix backing
+  tracks in it (#24, #29).
+- MIDI out through the gadget's rawmidi device, found by card ID, instead of
+  ALSA sequencer ports.
+- Unload FluidR3 after the jingle, or ship a small startup soundfont.
+- Idle mode for battery: after N seconds with no breath and no keys, drop the
+  tick rate and close the PCM streams; the codec driver then pulls SD_MODE
+  low and shuts the amp down. Resume on breath.
+- Make the hardcoded paths configurable (startup soundfont and MIDI under
+  /usr/share, `/usr/bin/sudo /usr/sbin/halt` for the shutdown combo); the
+  host shims them with tmpfiles symlinks for now.
+- MIDI out must not be fatal when no sequencer port exists.
+- `Pressure::init` evaluates `i2c.clock_speed()?` inside a `debug!`, so
+  `RUST_LOG=debug` makes it fail: rppal reads that from a sysfs file the
+  mainline I2C driver doesn't have. `log` evaluates the arguments before any
+  per-module filter, so debug logging is unusable until this is fixed.
+
+Done (commits on the fork; cc0c336 bumps `time`, which no longer
+compiled):
+- 778d4c2: rppal 0.13.1 -> 0.22.1. 0.13.1 identifies the board only by the rpi
+  kernel's compatible (`raspberrypi,model-zero-2`) and failed with
+  `UnknownModel` on mainline (`raspberrypi,model-zero-2-w`, matched from
+  rppal 0.16.0). No API changes needed.
+- c6d1c84: the pressure baseline was one startup sample. Resting noise is about
+  +/-8 counts (raw readings 2-19 around ~10), so a low first sample made
+  the main loop retrigger the note over 100 times a second. Now the
+  baseline averages 32 samples, and +/-10 counts around it count as no
+  breath (both sides, so the negative-pressure gesture still works).
+- 5a84d46: key scan through `/dev/gpiochip0` (gpiocdev), one line request for
+  the life of the process. Replaces rppal's register mapping, which needed
+  `iomem=relaxed` on mainline and was redone 500 times a second. haxo went
+  from about 62% to about 25% of one core at rest.
+- 9e06de6: poll up to 30 s for the sound card at startup instead of panicking
+  while the I2S card probes.
+
+## USB gadget (nixos/gadget.nix)
+
+configfs composite: NCM (usb0, same fixed MACs and 10.68.0.1 DHCP setup),
+ACM (ttyGS0 getty), MIDI (`f_midi`, ALSA id `haxophone`; hosts see a USB
+MIDI 1.0 device) and MTP (umtprd over FunctionFS, storage "Files" at
+/var/lib/haxophone/files). umtprd is `Type=notify` and signals after
+writing its descriptors; `usb-gadget-bind` then binds the UDC and is PartOf
+umtprd, so restarting umtprd rebinds (tested: under a second, host
+re-enumerates). If the bind fails, `usb-gadget-fallback` tears the gadget
+down and loads `g_cdc`, keeping network and serial. haxo picks the
+gadget's MIDI port (the last sequencer port; `snd_seq_dummy`'s Midi Through
+is the fallback) and is PartOf the bind unit, since a rebind recreates
+that port. FunctionFS is mounted `no_disconnect=1`: while umtprd is down
+only MTP stalls, but when it reopens ep0 the kernel unbinds the whole
+gadget anyway (`ffs_closed` -> `unregister_gadget_item`), so a successful
+umtprd restart costs one re-enumeration. The gadget units are
+`restartIfChanged = false`; gadget changes take effect at the next boot,
+because a live rebind cuts the link deploy-rs is using.
+
+## Wi-Fi (nixos/wifi.nix)
+
+iwd associates, networkd runs DHCP on wlan0, Avahi publishes
+haxophone.local. The network is the agenix secret `spaceless-wifi.age`, an
+env file with `WIFI_SSID` and `WIFI_PSK`; a oneshot writes iwd's per-network
+file from it before iwd starts. The board's host key (in secrets/secrets.nix)
+was generated on the bootstrap SD image; the layout keeps it on /persist.
+iwd needs `brcmfmac feature_disable=0x82000` on this chip: with the
+firmware's SAE and 4-way-handshake offload (FWSUP) enabled it stays in
+"connecting" forever (verified). wpa_supplicant, which Raspberry Pi OS uses,
+handles that offload path, so it would likely work without the option
+(untested); we keep iwd, and the host doing the handshake costs nothing.
+Deploys can go over Wi-Fi (`deploy --hostname <wlan0 address>`), which keeps
+large copies off the stall-prone USB link.
+
+## USB gadget endpoint budget
+
+The dwc2 core logs `EPs: 8, dedicated fifos, 4080 entries in SPRAM`: ep0
+plus 7 endpoint numbers, each able to carry a separate IN and OUT endpoint.
+With dedicated FIFOs every IN endpoint needs its own TX FIFO, and the dwc2
+overlay defines 7 (`g-tx-fifo-size = <512 512 512 512 512 256 256>`). So the
+limit is 7 IN + 7 OUT.
+
+| Function | IN | OUT |
+|---|---|---|
+| NCM | 2 | 1 |
+| MIDI | 1 | 1 |
+| MTP (umtprd) | 2 | 1 |
+| ACM serial | 2 | 1 |
+| All four | 7 | 4 |
+
+Verified on the board (2026-10-12, mainline 6.18): `hw_params` shows
+`num_dev_ep 7`, `dev_ep_dirs 0x0` (every endpoint number bidirectional) and
+`en_multiple_tx_fifo 1`; `params` shows seven TX FIFOs (256 256 512 512 512
+768 768 words) out of 4080 total. So 7 IN + 7 OUT holds, and all four
+functions fit.
+
+### TODO: USB audio out (UAC2), to the host as a sound card
+
+All 7 IN endpoints are taken, so this means dropping a function. ACM is the
+candidate (frees 2 IN, 1 OUT): the mini-UART console and SSH over NCM
+cover it.
+
+The configfs `uac2` function works on the stock kernel even though nixpkgs
+leaves `CONFIG_USB_CONFIGFS_F_UAC2` unset: `usb_f_uac2.ko` is built for the
+legacy `g_audio`, and configfs finds it by name. Verified 2026-10-13: modprobe
+plus `mkdir functions/uac2.t` in a scratch, unbound gadget shows the full
+attribute set. No kernel rebuild needed.
+
+Device-to-host only costs 1 IN endpoint, but only if the defaults are
+overridden. In f_uac2, `p_` is the gadget's playback (IN, what the host
+records) and `c_` is host-to-gadget (OUT). The defaults enable both sides,
+mute and volume controls (an interrupt IN), and async feedback (another
+IN), so 3 IN. Set:
+`p_chmask=3 c_chmask=0 p_mute_present=0 p_volume_present=0 p_srate=48000`.
+
+On the Pi it appears as a second ALSA playback card. Feed it from the own
+render loop as one more tap, with the same non-blocking ring buffer and
+drift correction as the Bluetooth bridge: the host's USB clock is not the
+I2S clock (u_audio also offers a "Playback Pitch" control to trim the rate).
+This turns the haxophone into a USB audio + MIDI interface for a DAW.
+Measure latency and CPU before calling it done.
+
+## Gadget decisions
+
+- **Ethernet: NCM.** Built-in drivers on Linux, macOS and Windows 10 2004+,
+  and it batches frames into fewer USB transfers. Fixed `host_addr`/`dev_addr`
+  so Windows doesn't create a new adapter each boot. IPv6 + IPv4 link-local
+  with mDNS; no DHCP server.
+- **MTP: umtprd** over cmtp-responder. cmtp-responder hardcodes its single
+  store to `/media/card` at compile time and hasn't had a commit since
+  2024-02; umtprd has runtime config, multiple stores, `sync_when_close`,
+  inotify events, and active maintenance. Neither is in nixpkgs. Borrow
+  cmtp's systemd unit layout for the FunctionFS mount and bind ordering.
