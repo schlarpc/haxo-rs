@@ -1,10 +1,5 @@
 # Users and Nix: what the host got from schlarpc-flake's shared modules.
-{
-  lib,
-  pkgs,
-  inputs,
-  ...
-}:
+{ ... }:
 {
   nix = {
     settings = {
@@ -31,9 +26,13 @@
   # root, so a passwd change wouldn't survive anyway. Login is by ssh key,
   # or autologin on the consoles.
   users.mutableUsers = false;
+  # No password and no ssh key in the config, which NixOS takes for a
+  # lockout. The keys come from the card at boot (config-file.nix), and the
+  # consoles (USB serial, mini UART) autologin.
+  users.allowNoPasswordLogin = true;
 
-  # The instrument's own user rather than a personal one; schlarpc's ssh
-  # keys log in to it.
+  # The instrument's own user rather than a personal one. Its ssh keys come
+  # from the settings file on the card (config-file.nix).
   users.users.haxophone = {
     isNormalUser = true;
     description = "Haxophone";
@@ -42,12 +41,7 @@
       "wheel"
       "systemd-journal"
     ];
-    shell = pkgs.fish;
-    openssh.authorizedKeys.keys = lib.filter (k: k != "") (
-      lib.splitString "\n" (builtins.readFile inputs.schlarpc-keys)
-    );
   };
 
-  programs.fish.enable = true;
   security.sudo.wheelNeedsPassword = false;
 }

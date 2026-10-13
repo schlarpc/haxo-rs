@@ -9,11 +9,11 @@ Raspberry Pi Zero 2 W. Design notes and decisions: [docs/haxophone.md](docs/haxo
 | `nixos/boot.nix` | Pi firmware -> U-Boot -> extlinux, mainline kernel, HAT overlay |
 | `nixos/storage.nix`, `nixos/disko.nix` | SD layout: FAT /boot, btrfs `/nix` + `/persist`, tmpfs root |
 | `nixos/gadget.nix` | USB gadget: NCM network, ACM console, MIDI, MTP |
-| `nixos/wifi.nix` | iwd + networkd, network from an agenix secret |
-| `packages/` | haxo-rs (from our fork), umtprd, the minting app |
-| `secrets/` | agenix secrets and their recipients |
+| `nixos/wifi.nix` | iwd + networkd + Avahi |
+| `nixos/config-file.nix` | Applies `config/haxophone.toml` from the card at boot |
+| `packages/` | haxo-rs (from our fork), umtprd, the settings tool, the minting app |
 
-`nix develop` provides `deploy` and `agenix`.
+`nix develop` provides `deploy`.
 
 ## Minting an SD card
 
@@ -23,40 +23,50 @@ On an x86_64 NixOS machine with aarch64 emulation
 a chroot), with the card in a USB reader:
 
 ```sh
-nix run .#mint-sd -- /dev/disk/by-id/usb-<reader>-0:0 [ssh_host_ed25519_key]
+nix run .#mint-sd -- --ssh-keys ~/.ssh/id_ed25519.pub /dev/disk/by-id/usb-<reader>-0:0
 ```
 
 It builds the system, asks for sudo, and asks before it wipes the card. Then
 it partitions and formats the card (disko), puts the host key and a
-machine-id on `/persist`, and installs the system with its firmware, U-Boot
-and extlinux.conf. The card boots straight into the configured system.
+machine-id on `/persist`, installs the system with its firmware, U-Boot and
+extlinux.conf, and writes the settings file. The card boots straight into
+the configured system.
 
-Pass the board's existing host key to keep its identity, so agenix keeps
-decrypting the Wi-Fi secret. From the running board:
+Options:
+- `--ssh-keys FILE`: public keys that may log in, from a `.pub` or an
+  `authorized_keys` file. Repeatable.
+- `--config FILE`: a complete `haxophone.toml` (keys and Wi-Fi) instead of
+  the template. It is checked before the card is touched.
+- `--host-key FILE`: the board's ssh host key, so its fingerprint stays the
+  same across a reflash. Without it a new key is generated. From a running
+  board: `ssh haxophone@haxophone.local sudo cat /etc/ssh/ssh_host_ed25519_key > key`.
 
-```sh
-ssh 10.68.0.1 sudo cat /etc/ssh/ssh_host_ed25519_key > key  # then shred it
+## Settings: `config/haxophone.toml`
+
+The settings that belong to whoever has the instrument live on the card's
+FAT partition, so any computer with a card reader can change them:
+
+```toml
+ssh_authorized_keys = [
+  "ssh-ed25519 AAAA... you@laptop",
+]
+
+[[wifi]]
+ssid = "My Network"
+psk = "my passphrase"
+
+[[wifi]]
+ssid = "Open Cafe"   # no psk: an open network
 ```
 
-Without a key the app generates one and prints its public half. Put that in
-`secrets/secrets.nix` as `hostKey`, run `agenix -r`, and deploy. Until then
-the agenix Wi-Fi secret doesn't decrypt, but `wifi.txt` (below) works.
+The board reads the file at every boot; removing an entry removes it.
+Mistakes are skipped with a message in `journalctl -u haxophone-config`.
+On the board, after `sudo $EDITOR /boot/config/haxophone.toml`:
+`sudo systemctl restart haxophone-config iwd`. To check a file elsewhere:
+`nix run .#haxophone-config -- check haxophone.toml`.
 
-## Wi-Fi
-
-Besides the agenix secret, the board joins every network listed in
-`wifi.txt` on the card's FAT partition, so networks can be added from any
-computer with a card reader:
-
-```
-WIFI_SSID=My Network
-WIFI_PSK=my passphrase
-```
-
-One SSID line then its PSK line per network; `#` starts a comment. The
-minting app puts a commented template there. The file is read at every boot,
-and removing a network from it forgets that network. Errors in it show in
-`journalctl -u iwd-networks`.
+With no usable key, log in on the USB serial console (`ttyGS0`) or the
+mini UART: both autologin.
 
 ## Deploying
 

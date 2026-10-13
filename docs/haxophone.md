@@ -67,7 +67,7 @@ What the "Decided" items below turned into. Not yet booted on the board.
   `configurationLimit = 8` generations on the FAT partition.
 - **Root**: tmpfs, 128 MB. preservation (not impermanence; it is what
   schlarpc-flake's newer hosts use) keeps machine-id, the ed25519 host key
-  (symlinked from the initrd, so agenix can decrypt during activation),
+  (symlinked from the initrd),
   /var/lib/{nixos,systemd,bluetooth,haxophone} and /home/haxophone. Only an
   ed25519 host key is generated: an RSA one would change on every boot.
 - **Firmware**: only linux-firmware's `brcm/` and `cypress/` directories
@@ -77,13 +77,14 @@ What the "Decided" items below turned into. Not yet booted on the board.
   live (over Wi-Fi) or on the UART.
 - **Users**: immutable (`users.mutableUsers = false`); /etc/shadow is
   rebuilt every boot anyway. One user, `haxophone` (uid 1000), with
-  schlarpc's ssh keys from github.com/schlarpc.keys, autologin on the
-  consoles, and the deploy user.
+  autologin on the consoles; also the deploy user. Its ssh keys come from
+  the card (see "Settings file"), not the flake.
 - **Nix**: stock nixpkgs Nix, not Determinate (which the schlarpc-flake
   hosts get); nothing builds on the board.
 - **Minting** (packages/mint-sd.nix, see README.md): format the card in a
   reader with the disko CLI, put the host key and machine-id on /persist,
-  then `nixos-install --system` the prebuilt closure. Verified against a
+  `nixos-install --system` the prebuilt closure, and write the settings
+  file. Verified against a
   loop device on bagel, not yet with a card on the board.
 
 ## Decided
@@ -170,10 +171,9 @@ A web server on the board, reachable over the USB gadget and Wi-Fi
   levels, backing tracks).
 
 Open questions:
-- Wi-Fi config is now declarative (the agenix `spaceless-wifi` secret,
-  written to iwd at boot). Networks added from the web UI need persistent
-  state on the impermanent layout and must not be overwritten by the
-  declared one.
+- Wi-Fi networks come from the settings file on the card (see "Settings
+  file"). The web UI could edit that same file, which keeps one source of
+  truth.
 - Auth: anyone on the same Wi-Fi could reach it. At least a password, and
   maybe settings only over the USB link.
 - CPU cost of the server and the encoder, measured against the synth's
@@ -403,27 +403,40 @@ because a live rebind cuts the link deploy-rs is using.
 ## Wi-Fi (nixos/wifi.nix)
 
 iwd associates, networkd runs DHCP on wlan0, Avahi publishes
-haxophone.local. The network is the agenix secret `spaceless-wifi.age`, an
-env file with `WIFI_SSID` and `WIFI_PSK`; a oneshot writes iwd's per-network
-file from it before iwd starts. The board's host key (in secrets/secrets.nix)
-was generated on the bootstrap SD image; the layout keeps it on /persist.
-iwd needs `brcmfmac feature_disable=0x82000` on this chip: with the
+haxophone.local. The networks come from the settings file on the card (next
+section). iwd needs `brcmfmac feature_disable=0x82000` on this chip: with the
 firmware's SAE and 4-way-handshake offload (FWSUP) enabled it stays in
 "connecting" forever (verified). wpa_supplicant, which Raspberry Pi OS uses,
 handles that offload path, so it would likely work without the option
 (untested); we keep iwd, and the host doing the handshake costs nothing.
-Networks can also go in `wifi.txt` on the FAT boot partition
-(2026-10-13): editable from any computer with the card in a reader, so the
-board can join a new network (a venue, a phone hotspot) without a rebuild
-or the agenix key. One `WIFI_SSID=` then `WIFI_PSK=` line per network, the
-secret's format repeated; a 64-hex-digit PSK is taken as a raw key. A
-oneshot writes iwd's files from both sources at every boot, into the tmpfs
-root, so editing the file is the whole lifecycle. The secret is optional
-(`EnvironmentFile=-`), so a freshly minted card with a new host key still
-gets on Wi-Fi from wifi.txt. The PSKs are plain text on the card, which is
-no worse than before: the card holds everything else unencrypted too.
 Deploys can go over Wi-Fi (`deploy --hostname <wlan0 address>`), which keeps
 large copies off the stall-prone USB link.
+
+## Settings file (nixos/config-file.nix, packages/haxophone-config)
+
+Decided 2026-10-13: nothing about who uses the instrument is in the flake.
+The ssh keys and Wi-Fi networks live in `config/haxophone.toml` on the FAT
+boot partition, editable from any computer with the card in a reader, so a
+new network (a venue, a phone hotspot) or a new laptop needs no rebuild.
+Before this, the Wi-Fi network was an agenix secret and the keys came from
+github.com/schlarpc.keys; both inputs and agenix are gone.
+
+- TOML, parsed by a small Python tool (`tomllib`, stdlib). Python was
+  already in the closure. Errors come with line numbers.
+- `haxophone-config apply` runs as a oneshot at every boot, before iwd and
+  sshd. It writes iwd's network files into /var/lib/iwd and the keys to
+  /run/haxophone-config/authorized_keys/haxophone, which sshd reads through
+  `AuthorizedKeysFile` (`%u`, so the keys can't log in as root). Both are
+  on tmpfs, so the file is the whole lifecycle. A bad entry is skipped with
+  a message; a file that doesn't parse applies nothing.
+- When the file is missing, the board writes a commented template.
+  mint-sd writes the template with `--ssh-keys` filled in, or a given
+  `--config`, and checks it before wiping the card.
+- With no usable key, the consoles' autologin is the way in, which is why
+  `users.allowNoPasswordLogin` is set: NixOS sees no password and no key in
+  the config and would refuse to build.
+- The file is plain text on the card, PSKs included, which is no worse
+  than before: the card holds everything else unencrypted too.
 
 ## USB gadget endpoint budget
 

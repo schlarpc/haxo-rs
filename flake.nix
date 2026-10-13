@@ -10,10 +10,6 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     preservation.url = "github:nix-community/preservation";
-    agenix = {
-      url = "github:ryantm/agenix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
     deploy-rs.url = "github:serokell/deploy-rs";
     # Rust builds (packages/haxo-rs). crane vendors dependencies straight
     # from Cargo.lock, git dependencies included, so there is no cargoHash to
@@ -26,11 +22,6 @@
       url = "github:schlarpc/haxo-rs";
       flake = false;
     };
-    # Login keys for the board and agenix recipients.
-    schlarpc-keys = {
-      url = "https://github.com/schlarpc.keys";
-      flake = false;
-    };
   };
 
   outputs =
@@ -38,7 +29,6 @@
       self,
       nixpkgs,
       deploy-rs,
-      agenix,
       ...
     }@inputs:
     let
@@ -110,12 +100,13 @@
           src = inputs.haxo-rs;
         };
         umtprd = pkgs.callPackage ./packages/umtprd.nix { };
+        haxophone-config = pkgs.callPackage ./packages/haxophone-config { };
         mint-sd = pkgs.callPackage ./packages/mint-sd.nix {
           disko = inputs.disko.packages.${pkgs.stdenv.hostPlatform.system}.disko;
           diskoFile = ./nixos/disko.nix;
           toplevel = haxophone.config.system.build.toplevel;
           hostName = haxophone.config.networking.hostName;
-          wifiTemplate = ./nixos/wifi.txt;
+          haxophone-config = self.packages.${pkgs.stdenv.hostPlatform.system}.haxophone-config;
         };
       });
 
@@ -130,7 +121,6 @@
         default = pkgs.mkShellNoCC {
           nativeBuildInputs = [
             (deployRsPackage pkgs)
-            agenix.packages.${pkgs.stdenv.hostPlatform.system}.agenix
           ];
         };
       });

@@ -1,0 +1,15 @@
+# Haxophone settings, read at every boot. Edit this file with the SD card in
+# any computer: it is on the card's FAT partition, in the config folder.
+
+# SSH public keys that may log in as the "haxophone" user, one per string,
+# e.g. the contents of ~/.ssh/id_ed25519.pub.
+ssh_authorized_keys = [
+  # "ssh-ed25519 AAAA... you@laptop",
+]
+
+# Wi-Fi networks to join. Copy the block once per network; leave psk out
+# for an open network. Removing a block forgets that network.
+#
+# [[wifi]]
+# ssid = "My Network"
+# psk = "my passphrase"

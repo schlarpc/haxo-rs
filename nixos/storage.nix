@@ -27,9 +27,8 @@
           file = "/etc/machine-id";
           inInitrd = true;
         }
-        # The host key is agenix's identity, and agenix decrypts during
-        # activation, before preservation's stage-2 units run. inInitrd puts
-        # the symlinks in place from the initrd so every boot can decrypt.
+        # The host's ssh identity, kept so its fingerprint survives reboots
+        # and reflashes (mint-sd can install an existing key).
         {
           file = "/etc/ssh/ssh_host_ed25519_key";
           how = "symlink";

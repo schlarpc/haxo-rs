@@ -1,9 +1,0 @@
-# Wi-Fi networks for the Haxophone, read at every boot.
-#
-# Add one block per network: a WIFI_SSID line, then its WIFI_PSK line.
-# Quotes around a value are optional; use them to keep leading or trailing
-# spaces. Lines starting with # are ignored.
-# Removing a block forgets that network at the next boot.
-#
-#   WIFI_SSID=My Network
-#   WIFI_PSK=my passphrase

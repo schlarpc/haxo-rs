@@ -23,10 +23,10 @@ let
 in
 {
   imports = [
-    inputs.agenix.nixosModules.age
     ./base.nix
     ./boot.nix
     ./storage.nix
+    ./config-file.nix
     ./gadget.nix
     ./wifi.nix
   ];

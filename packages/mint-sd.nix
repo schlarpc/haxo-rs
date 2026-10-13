@@ -1,12 +1,16 @@
 # Mint an SD card for the haxophone from a card reader on another machine:
 # partition and format it with disko (nixos/disko.nix), give the host its
-# identity on /persist, and install the system closure. The card boots
-# straight into the configured system, with no installer step on the Pi.
+# identity on /persist, install the system closure, and write the settings
+# file (config/haxophone.toml on the FAT partition). The card boots straight
+# into the configured system, with no installer step on the Pi.
 #
-#   nix run .#mint-sd -- /dev/sdX [ssh_host_ed25519_key]
+#   nix run .#mint-sd -- [options] /dev/sdX
 #
-# With a host key, the card keeps that identity (and agenix keeps
-# decrypting). Without one it generates a new key and prints what to do.
+#   --ssh-keys FILE   public keys allowed to log in (a .pub or an
+#                     authorized_keys file); repeatable
+#   --config FILE     a complete haxophone.toml instead of the template
+#   --host-key FILE   the board's ssh host key, to keep its fingerprint;
+#                     a new one is generated otherwise
 #
 # On x86_64 the install activates the aarch64 system in a chroot, so the
 # machine needs aarch64 binfmt emulation with the fix-binary flag
@@ -24,7 +28,7 @@
   diskoFile,
   toplevel,
   hostName,
-  wifiTemplate,
+  haxophone-config,
 }:
 writeShellApplication {
   name = "mint-sd";
@@ -35,20 +39,34 @@ writeShellApplication {
     systemd
     nixos-install-tools
     disko
+    haxophone-config
   ];
   text = ''
     usage() {
-      echo "usage: mint-sd <device> [ssh_host_ed25519_key]" >&2
+      echo "usage: mint-sd [--ssh-keys FILE]... [--config FILE] [--host-key FILE] <device>" >&2
       exit 2
     }
-    [ $# -ge 1 ] && [ $# -le 2 ] || usage
 
     if [ "$(id -u)" -ne 0 ]; then
       exec sudo -- "$0" "$@"
     fi
 
-    dev=$(readlink -f "$1")
-    key=''${2:+$(readlink -f "$2")}
+    dev="" key="" config=""
+    keyfiles=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --ssh-keys) [ $# -ge 2 ] || usage; keyfiles+=(--ssh-keys "$(readlink -f "$2")"); shift 2 ;;
+        --config) [ $# -ge 2 ] || usage; config=$(readlink -f "$2"); shift 2 ;;
+        --host-key) [ $# -ge 2 ] || usage; key=$(readlink -f "$2"); shift 2 ;;
+        -*) usage ;;
+        *) [ -z "$dev" ] || usage; dev=$(readlink -f "$1"); shift ;;
+      esac
+    done
+    [ -n "$dev" ] || usage
+    if [ -n "$config" ] && [ ''${#keyfiles[@]} -gt 0 ]; then
+      echo "--config and --ssh-keys don't combine: put the keys in the config" >&2
+      exit 2
+    fi
 
     [ -b "$dev" ] || { echo "$dev is not a block device" >&2; exit 1; }
     case "$(lsblk -dno TYPE "$dev")" in
@@ -71,6 +89,16 @@ writeShellApplication {
       fi
     ''}
     command -v nix >/dev/null || { echo "nix is not on PATH" >&2; exit 1; }
+
+    # The settings file, built and checked before anything is wiped.
+    settings=$(mktemp)
+    trap 'rm -f "$settings"' EXIT
+    if [ -n "$config" ]; then
+      cp "$config" "$settings"
+    else
+      haxophone-config template "''${keyfiles[@]}" > "$settings"
+    fi
+    haxophone-config check "$settings" || { echo "fix the settings first" >&2; exit 1; }
 
     lsblk -o NAME,SIZE,MODEL,SERIAL "$dev"
     echo
@@ -96,24 +124,16 @@ writeShellApplication {
     nixos-install --system ${toplevel} --root "$mnt" \
       --no-root-passwd --no-channel-copy
 
-    # The board also writes it at boot when missing; here it's there to fill
-    # in before the first boot.
-    [ -e "$mnt/boot/wifi.txt" ] || cp ${wifiTemplate} "$mnt/boot/wifi.txt"
+    install -D -m 0644 "$settings" "$mnt/boot/config/haxophone.toml"
 
-    pub=$(cat "$mnt/persist/etc/ssh/ssh_host_ed25519_key.pub")
+    fingerprint=$(ssh-keygen -l -f "$mnt/persist/etc/ssh/ssh_host_ed25519_key.pub")
     umount -R "$mnt"
     rmdir "$mnt"
     sync
 
     echo
     echo "Done. $dev can be removed."
-    echo "To add Wi-Fi networks, edit wifi.txt on its FAT partition."
-    if [ -z "$key" ]; then
-      echo
-      echo "New host key; set hostKey in secrets/secrets.nix to:"
-      echo "  $pub"
-      echo "then run 'agenix -r' and deploy, or the Wi-Fi secret won't decrypt"
-      echo "(networks in wifi.txt work without it)."
-    fi
+    echo "Host key: $fingerprint"
+    echo "Settings (ssh keys, Wi-Fi): config/haxophone.toml on its FAT partition."
   '';
 }
