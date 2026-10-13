@@ -9,6 +9,40 @@ Until 2026-10-13 the host lived in schlarpc-flake (`hosts/haxophone`, booted
 from nixpkgs' SD image). It moved to this repo with the storage layout
 below; the sections before "Layout" describe that bootstrap.
 
+## TODO
+
+Roughly in order. Details are in the sections named.
+
+1. **First card on the new layout.** Nothing in "Layout" has booted yet;
+   the board still runs the bootstrap card (user `schlarpc`, ext4 root).
+   - Keep the host key: `ssh schlarpc@10.68.0.1 sudo cat
+     /etc/ssh/ssh_host_ed25519_key > key` while the bootstrap card runs.
+   - Mint a second card (keep the bootstrap card as the fallback):
+     `nix run .#mint-sd -- --host-key key --config haxophone.toml <dev>`,
+     with your ssh keys and Wi-Fi in the TOML. Shred `key` afterwards.
+   - On the first boot, check in this order: the firmware starts at all
+     (nothing on the mini UART points at the hybrid MBR first); U-Boot
+     finds extlinux.conf on GPT partition 1; the initrd mounts btrfs and
+     the tmpfs root; `ssh haxophone@10.68.0.1` works with the card's keys
+     and the old fingerprint; Wi-Fi joins from the TOML; MemTotal is up
+     from 376 MB (`gpu_mem=16`, no vc4); the gadget's four functions
+     enumerate; haxo plays. Then reboot once and check that machine-id,
+     the host key and /home/haxophone survived.
+   - Record what happened in "Layout", and drop its "untested" notes.
+2. **USB gadget stalls** under sustained bulk transfers ("Open issue"):
+   reproduce over Wi-Fi with the kernel log live.
+3. **Bluetooth audio bench test** ("Bluetooth"): pair a receiver,
+   measure latency per codec and CPU next to haxo, listen for radio noise.
+4. **haxo-rs patches** ("Patches to make"), each reproduced and measured
+   on the board first ("Upstream issues"). The breath CC cap comes before
+   Bluetooth MIDI.
+5. **Bluetooth MIDI**: our own BLE MIDI GATT service, since BlueZ's MIDI
+   plugin only connects out (#41 under "Upstream issues").
+6. **Own render loop with the Bluetooth bridge** ("Outputs", build order
+   step 3).
+7. **USB audio out** (UAC2, "TODO: USB audio out"), and the **web UI**
+   ("TODO: web UI"), which could edit the settings file on the card.
+
 ## Bootstrap (schlarpc-flake hosts/haxophone, 2026-10-12)
 
 nixpkgs' aarch64 SD image module with the mainline kernel (6.18, from
@@ -344,6 +378,9 @@ Ways to measure each:
 - Polyphony 8-16 with per-channel mono/legato mode instead of
   `set_polyphony(1)` (see #29 above).
 - Rate-limit breath CC#2 on MIDI out (see #41 above).
+- Bluetooth MIDI: a BLE MIDI GATT service of our own (e.g. the `bluer`
+  crate), so phones and DAWs can connect to the instrument; after the
+  breath CC cap (see #41 above).
 - Main loop at realtime priority below the audio thread, `mlockall`, and no
   sleeps in the loop.
 - Own render loop with the BT bridge (see Outputs). PipeWire must never
