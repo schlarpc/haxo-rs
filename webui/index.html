@@ -1,0 +1,1356 @@
+<title>Haxophone Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=B612:wght@400;700&family=B612+Mono:wght@400;700&display=swap">
+<style>
+/* Haxophone web UI spike. Served by the board later; for now every call goes
+   to the mock in the script below (see docs/webui.md for the API it stands
+   in for). Self-contained: if the font host is unreachable (a board on a
+   venue hotspot), the system faces take over. */
+
+:root {
+  color-scheme: light;
+  --ground: #edf1ec;
+  --surface: #ffffff;
+  --surface-2: #f5f8f4;
+  --ink: #16201b;
+  --muted: #5a6961;
+  --line: #d3dbd5;
+  --gold: #8f6f0e;
+  --gold-soft: #f3e6b8;
+  --on-gold: #ffffff;
+  --pcb: #18241f;
+  --pcb-edge: #0d1411;
+  --silk: #dfe8e2;
+  --good: #23824a;
+  --warn: #a8700a;
+  --bad: #c13c33;
+  --focus: #8f6f0e;
+
+  --cap-purple: #b49ee0;
+  --cap-orange: #f39a3d;
+  --cap-blue: #4cb3e6;
+  --cap-black: #3a403d;
+  --cap-pink: #ff6fae;
+  --cap-green: #2ea377;
+  --cap-yellow: #f1d23a;
+  --cap-octave: #c9d1cb;
+
+  --font-ui: "B612", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-data: "B612 Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --r: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #0d1210;
+    --surface: #151c18;
+    --surface-2: #1b241f;
+    --ink: #e4ebe6;
+    --muted: #92a199;
+    --line: #27322c;
+    --gold: #d6b143;
+    --gold-soft: #3a3115;
+    --on-gold: #1a1505;
+    --pcb: #1a2621;
+    --pcb-edge: #070b09;
+    --silk: #d9e3dc;
+    --good: #4cc27c;
+    --warn: #e0a83a;
+    --bad: #f0675c;
+    --focus: #d6b143;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #0d1210;
+  --surface: #151c18;
+  --surface-2: #1b241f;
+  --ink: #e4ebe6;
+  --muted: #92a199;
+  --line: #27322c;
+  --gold: #d6b143;
+  --gold-soft: #3a3115;
+  --on-gold: #1a1505;
+  --pcb: #1a2621;
+  --pcb-edge: #070b09;
+  --silk: #d9e3dc;
+  --good: #4cc27c;
+  --warn: #e0a83a;
+  --bad: #f0675c;
+  --focus: #d6b143;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { min-height: 100%; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.45;
+  padding-inline: 16px;
+}
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.wrap { max-width: 1120px; margin: 0 auto; padding-block: 12px 40px; }
+
+/* Header + tabs */
+.top {
+  position: sticky;
+  top: env(safe-area-inset-top, 0px);
+  z-index: 5;
+  background: var(--ground);
+  margin-inline: -16px;
+  padding-inline: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.top-inner { max-width: 1120px; margin: 0 auto; }
+.brand {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; padding-block: 12px 4px;
+}
+.brand h1 {
+  margin: 0; font-size: 18px; font-weight: 700; letter-spacing: 0.02em;
+}
+.brand h1 span { color: var(--muted); font-weight: 400; }
+.status { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-data); font-size: 12px;
+  padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface);
+  color: var(--muted); white-space: nowrap;
+}
+.chip .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.chip.good { color: var(--good); }
+.chip.warn { color: var(--warn); }
+.chip.demo { color: var(--gold); border-color: var(--gold); }
+
+.tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  background: none; border: 0; cursor: pointer;
+  padding: 10px 14px 9px; color: var(--muted);
+  border-bottom: 3px solid transparent; white-space: nowrap;
+  font-size: 14px; letter-spacing: 0.02em;
+}
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--gold); }
+.tab:hover { color: var(--ink); }
+
+/* Panels */
+section[role="tabpanel"] { padding-top: 18px; }
+h2 {
+  font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--muted); margin: 0 0 10px;
+}
+.card {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 16px;
+}
+.stack { display: grid; gap: 16px; align-content: start; }
+.cols { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; }
+.hint { color: var(--muted); font-size: 13px; margin: 0; }
+.mono { font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  border: 1px solid var(--line); background: var(--surface-2);
+  border-radius: var(--r); padding: 7px 14px; cursor: pointer;
+  font-size: 14px; min-height: 36px;
+}
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--gold); border-color: var(--gold); color: var(--on-gold); font-weight: 700; }
+.btn.danger { color: var(--bad); }
+.btn.small { min-height: 30px; padding: 4px 10px; font-size: 13px; }
+.btn[disabled] { opacity: 0.55; cursor: progress; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.spacer { flex: 1; }
+
+/* Play */
+.play { display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 860px) {
+  .play { grid-template-columns: minmax(340px, 460px) minmax(0, 1fr); align-items: start; }
+}
+.board-card { padding: 10px; background: var(--surface); }
+.board-card svg { display: block; width: 100%; height: auto; max-height: 78vh; touch-action: manipulation; }
+.key { cursor: pointer; }
+.key .cap { transition: fill 60ms linear; }
+.key:focus { outline: none; }
+.key:focus-visible .cap { stroke: var(--gold); stroke-width: 1.1; }
+.board-legend { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 6px 4px 0; }
+
+.readout { display: grid; gap: 4px; }
+.note {
+  font-family: var(--font-data); font-weight: 700;
+  font-size: clamp(56px, 12vw, 96px); line-height: 1; letter-spacing: -0.02em;
+}
+.note.none { color: var(--muted); }
+.meta { display: flex; gap: 18px; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
+.meta b { color: var(--ink); font-weight: 400; }
+
+.meter { position: relative; height: 14px; border-radius: 3px; background: var(--surface-2); border: 1px solid var(--line); overflow: hidden; }
+.meter .fill { position: absolute; inset: 0 auto 0 0; background: var(--cap-blue); width: 0; }
+.meter .tick { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--muted); }
+.scope { width: 100%; height: 96px; display: block; background: var(--pcb); border-radius: 4px; }
+
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.seg button { border: 0; background: var(--surface-2); padding: 6px 12px; cursor: pointer; font-size: 13px; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--gold-soft); color: var(--ink); font-weight: 700; }
+
+label.field { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+input[type="text"], input[type="password"], select {
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 7px 10px; min-height: 36px; width: 100%; color: var(--ink);
+}
+input[type="range"] { width: 100%; accent-color: var(--gold); }
+input[type="checkbox"] { accent-color: var(--gold); width: 16px; height: 16px; }
+
+/* Lists (Wi-Fi, Bluetooth, files) */
+.list { display: grid; }
+.item {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px;
+  align-items: center; padding: 10px 0; border-top: 1px solid var(--line);
+}
+.item:first-child { border-top: 0; }
+.item .name { font-weight: 700; overflow-wrap: anywhere; }
+.item .sub { color: var(--muted); font-size: 13px; }
+.item .actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.item .expand { grid-column: 1 / -1; display: grid; gap: 10px; padding: 4px 0 6px; }
+.pill {
+  font-family: var(--font-data); font-size: 11px; padding: 1px 7px; border-radius: 3px;
+  border: 1px solid currentColor; white-space: nowrap;
+}
+.pill.good { color: var(--good); }
+.pill.gold { color: var(--gold); }
+.pill.muted { color: var(--muted); }
+.bars { display: inline-grid; grid-auto-flow: column; gap: 2px; align-items: end; height: 16px; }
+.bars i { width: 4px; background: var(--line); border-radius: 1px; }
+.bars i.on { background: var(--ink); }
+.glyph { width: 30px; text-align: center; color: var(--muted); font-family: var(--font-data); font-size: 12px; }
+.empty { color: var(--muted); font-size: 14px; padding: 8px 0; }
+.spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--gold); border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } .key .cap { transition: none; } }
+
+.drop {
+  border: 1.5px dashed var(--line); border-radius: var(--r); padding: 18px;
+  text-align: center; color: var(--muted); font-size: 14px;
+}
+.drop.over { border-color: var(--gold); color: var(--ink); background: var(--gold-soft); }
+.storage { display: grid; gap: 6px; }
+
+.toast {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  background: var(--ink); color: var(--ground); padding: 9px 16px; border-radius: var(--r);
+  font-size: 14px; max-width: calc(100% - 32px); z-index: 10;
+}
+footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
+footer code { font-family: var(--font-data); }
+</style>
+
+<header class="top">
+  <div class="top-inner">
+    <div class="brand">
+      <h1>haxophone <span class="mono">· console</span></h1>
+      <div class="status" id="status"></div>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab" role="tab" id="tab-play" aria-controls="play" aria-selected="true">Play</button>
+      <button class="tab" role="tab" id="tab-wifi" aria-controls="wifi" aria-selected="false">Wi-Fi</button>
+      <button class="tab" role="tab" id="tab-bluetooth" aria-controls="bluetooth" aria-selected="false">Bluetooth</button>
+      <button class="tab" role="tab" id="tab-sounds" aria-controls="sounds" aria-selected="false">Sounds</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <!-- Play: live fingering, breath, and the audio tap -->
+  <section id="play" role="tabpanel" aria-labelledby="tab-play">
+    <div class="play">
+      <div class="card board-card">
+        <svg id="board" role="group" aria-label="Haxophone keys, front view"></svg>
+        <div class="board-legend">
+          <p class="hint">Tap keys to finger a note.</p>
+          <p class="hint mono" id="fingering">keys 0x000000</p>
+        </div>
+      </div>
+
+      <div class="stack">
+        <div class="card stack">
+          <div class="row">
+            <h2 style="margin:0">Now playing</h2>
+            <span class="spacer"></span>
+            <div class="seg" role="group" aria-label="Input">
+              <button id="mode-demo" aria-pressed="true">Demo tune</button>
+              <button id="mode-manual" aria-pressed="false">My fingers</button>
+            </div>
+          </div>
+          <div class="readout">
+            <div class="note" id="note" aria-live="polite">—</div>
+            <div class="meta">
+              <span>MIDI <b class="mono" id="midi">—</b></span>
+              <span>written pitch</span>
+              <span>sound <b id="sound-name">—</b></span>
+              <span>transpose <b class="mono" id="transpose-readout">0</b></span>
+            </div>
+          </div>
+          <div class="stack" style="gap:6px">
+            <div class="row"><span class="hint">Breath (CC2)</span><span class="spacer"></span><span class="mono hint" id="breath-val">0</span></div>
+            <div class="meter" aria-hidden="true"><div class="fill" id="breath-fill"></div><div class="tick" style="left:8%"></div></div>
+            <label class="field" id="breath-manual" hidden>Breath, while fingering by hand
+              <input type="range" id="breath-input" min="0" max="127" value="70">
+            </label>
+          </div>
+        </div>
+
+        <div class="card stack">
+          <div class="row">
+            <h2 style="margin:0">Listen in</h2>
+            <span class="spacer"></span>
+            <button class="btn primary" id="listen">Listen</button>
+          </div>
+          <canvas class="scope" id="scope" width="640" height="96" aria-label="Waveform of the board's mix"></canvas>
+          <div class="stack" style="gap:6px">
+            <div class="row"><span class="hint">Level</span><span class="spacer"></span><span class="mono hint" id="level-val">off</span></div>
+            <div class="meter" aria-hidden="true"><div class="fill" id="level-fill" style="background:var(--good)"></div></div>
+          </div>
+          <p class="hint">The same mix the in-ear jack gets, tapped without ever slowing the player down: a late listener drops audio, the instrument never waits.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Wi-Fi -->
+  <section id="wifi" role="tabpanel" aria-labelledby="tab-wifi" hidden>
+    <div class="cols">
+      <div class="stack">
+        <div class="card stack" id="wifi-current"></div>
+        <div class="card">
+          <div class="row" style="margin-bottom:6px">
+            <h2 style="margin:0">Saved networks</h2>
+          </div>
+          <p class="hint" style="margin-bottom:8px">Kept in <span class="mono">config/haxophone.toml</span> on the card, joined at every boot.</p>
+          <div class="list" id="wifi-saved"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="row" style="margin-bottom:6px">
+          <h2 style="margin:0">Nearby</h2>
+          <span class="spacer"></span>
+          <button class="btn small" id="wifi-scan">Scan</button>
+        </div>
+        <div class="list" id="wifi-nearby"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Bluetooth -->
+  <section id="bluetooth" role="tabpanel" aria-labelledby="tab-bluetooth" hidden>
+    <div class="cols">
+      <div class="stack">
+        <div class="card stack" id="bt-adapter"></div>
+        <div class="card">
+          <h2>Paired</h2>
+          <div class="list" id="bt-paired"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="row" style="margin-bottom:6px">
+          <h2 style="margin:0">Find a speaker</h2>
+          <span class="spacer"></span>
+          <button class="btn small" id="bt-scan">Scan</button>
+        </div>
+        <p class="hint" style="margin-bottom:6px">Put the speaker or receiver in pairing mode first. Low-latency codecs (aptX LL, FastStream) need a receiver that supports them.</p>
+        <div class="list" id="bt-nearby"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Sounds: soundfont files and instrument settings -->
+  <section id="sounds" role="tabpanel" aria-labelledby="tab-sounds" hidden>
+    <div class="cols">
+      <div class="card stack">
+        <h2 style="margin:0">Instrument</h2>
+        <label class="field">Soundfont
+          <select id="sf-active"></select>
+        </label>
+        <label class="field">Preset
+          <select id="sf-preset"></select>
+        </label>
+        <label class="field">Transpose
+          <select id="transpose">
+            <option value="0">C (concert)</option>
+            <option value="-2">B♭ (tenor, soprano)</option>
+            <option value="-9">E♭ (alto, baritone)</option>
+            <option value="-7">F</option>
+          </select>
+        </label>
+        <label class="field">Volume <span class="mono" id="volume-val"></span>
+          <input type="range" id="volume" min="0" max="100" value="60">
+        </label>
+        <p class="hint">The line out is bridge-tied and loud at full scale; keep in-ear monitors low.</p>
+      </div>
+      <div class="card stack">
+        <div class="row">
+          <h2 style="margin:0">Soundfonts</h2>
+        </div>
+        <div class="list" id="sf-list"></div>
+        <div class="drop" id="drop">
+          Drop <span class="mono">.sf2</span> / <span class="mono">.sf3</span> files here, or
+          <label class="btn small" style="margin-left:4px">choose files<input type="file" id="sf-file" accept=".sf2,.sf3" multiple hidden></label>
+        </div>
+        <div class="storage">
+          <div class="row"><span class="hint">Card storage</span><span class="spacer"></span><span class="mono hint" id="storage-val"></span></div>
+          <div class="meter"><div class="fill" id="storage-fill" style="background:var(--muted)"></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Spike: everything here is simulated in the browser, nothing reaches a board. The API it stands in for is in <code>docs/webui.md</code>.
+    Board drawing from <span class="mono" id="geo-source"></span>.
+  </footer>
+</main>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ */
+/* Board geometry, generated from haxo-hw's KiCad PCB by               */
+/* webui/tools/gen-geometry.py. Millimetres, PCB coordinates.          */
+// BEGIN GEOMETRY (generated; do not edit by hand)
+const GEOMETRY = {
+ "source": "haxo-hw 83e9a15/haxophone001.kicad_pcb",
+ "outline": "M63.5 253.17 A5.08 5.08 0 0 1 58.42 258.25 L37.26 258.24 A5.07 5.07 0 0 1 32.19 253.16 L32.19 249.16 L32.19 183.64 A5.08 5.08 0 0 1 37.27 178.56 L50.04 178.56 A5.08 5.08 0 0 0 55.12 173.48 L55.12 166.62 A1.27 1.27 0 1 0 52.58 166.62 A5.08 5.08 0 0 1 47.5 171.7 L28.45 171.7 A5.08 5.08 0 0 1 23.37 166.62 L23.37 112.01 A5.08 5.08 0 0 1 28.45 106.93 L47.5 106.93 A5.08 5.08 0 0 1 52.58 112.01 A1.27 1.27 0 1 0 55.12 112.01 L55.12 108.71 A1.78 1.78 0 0 0 53.34 106.93 A3.3 3.3 0 0 1 50.04 103.63 L50.04 54.36 L50.04 52.07 A5.08 5.08 0 0 1 55.12 46.99 L64.77 46.99 L119.38 46.99 A5.08 5.08 0 0 1 124.46 52.07 L124.46 101.6 A5.08 5.08 0 0 1 119.38 106.68 L109.73 106.68 A5.08 5.08 0 0 0 104.65 111.76 L104.65 121.92 A5.08 5.08 0 0 0 109.73 127 L119.38 127 A5.08 5.08 0 0 1 124.46 132.08 L124.46 192.53 A5.08 5.08 0 0 1 119.38 197.61 L118.11 197.61 A1.27 1.27 0 0 0 116.84 198.88 L116.84 202.88 L116.84 213.55 A1.27 1.27 0 0 0 118.11 214.82 L120.65 214.82 A5.08 5.08 0 0 1 125.73 219.9 L125.73 240.22 A5.08 5.08 0 0 1 120.65 245.3 L71.12 245.3 A5.08 5.08 0 0 1 66.04 240.22 L66.04 219.9 A5.08 5.08 0 0 1 71.12 214.82 L73.41 214.82 A1.27 1.27 0 0 0 73.41 212.28 L68.58 212.28 A5.08 5.08 0 0 0 63.5 217.36 L63.5 253.17 Z M110.49 197.61 L101.35 197.61 A5.08 5.08 0 0 0 96.27 202.69 L96.27 206.69 L96.27 207.2 A5.08 5.08 0 0 1 91.19 212.28 L83.57 212.28 L81.03 212.28 A1.27 1.27 0 1 0 81.03 214.82 L83.57 214.82 L91.19 214.82 L110.49 214.82 A1.27 1.27 0 0 0 111.76 213.55 L111.76 202.88 L111.76 198.88 A1.27 1.27 0 0 0 110.49 197.61 Z M52.58 119.63 A1.27 1.27 0 0 1 55.12 119.63 L55.12 159 A1.27 1.27 0 1 1 52.58 159 L52.58 119.63 Z",
+ "clip": "M20 106 H55.2 V178.5 H20 Z M62 213.5 H200 V300 H62 Z M110.6 196 H200 V213.5 H110.6 Z",
+ "keys": [
+  {
+   "bit": 0,
+   "ref": "MX8",
+   "x": 81.026,
+   "y": 105.918
+  },
+  {
+   "bit": 1,
+   "ref": "MX9",
+   "x": 72.39,
+   "y": 76.2
+  },
+  {
+   "bit": 2,
+   "ref": "MX17",
+   "x": 77.47,
+   "y": 226.25
+  },
+  {
+   "bit": 3,
+   "ref": "MX1",
+   "x": 36.322,
+   "y": 120.904
+  },
+  {
+   "bit": 4,
+   "ref": "MX10",
+   "x": 62.23,
+   "y": 97.79
+  },
+  {
+   "bit": 5,
+   "ref": "MX18",
+   "x": 96.52,
+   "y": 226.25
+  },
+  {
+   "bit": 6,
+   "ref": "MX2",
+   "x": 31.496,
+   "y": 139.954
+  },
+  {
+   "bit": 7,
+   "ref": "MX11",
+   "x": 81.28,
+   "y": 97.79
+  },
+  {
+   "bit": 8,
+   "ref": "MX19",
+   "x": 115.57,
+   "y": 226.25
+  },
+  {
+   "bit": 9,
+   "ref": "MX3",
+   "x": 36.322,
+   "y": 159.004
+  },
+  {
+   "bit": 10,
+   "ref": "MX12",
+   "x": 72.39,
+   "y": 116.84
+  },
+  {
+   "bit": 12,
+   "ref": "MX21",
+   "x": 50.8,
+   "y": 193.04
+  },
+  {
+   "bit": 13,
+   "ref": "MX13",
+   "x": 72.39,
+   "y": 135.89
+  },
+  {
+   "bit": 14,
+   "ref": "MX4",
+   "x": 104.14,
+   "y": 138.43
+  },
+  {
+   "bit": 15,
+   "ref": "MX22",
+   "x": 50.8,
+   "y": 215.09
+  },
+  {
+   "bit": 16,
+   "ref": "MX14",
+   "x": 72.39,
+   "y": 158.75
+  },
+  {
+   "bit": 17,
+   "ref": "MX5",
+   "x": 113.03,
+   "y": 157.48
+  },
+  {
+   "bit": 18,
+   "ref": "MX23",
+   "x": 50.8,
+   "y": 234.14
+  },
+  {
+   "bit": 19,
+   "ref": "MX15",
+   "x": 72.39,
+   "y": 177.8
+  },
+  {
+   "bit": 20,
+   "ref": "MX6",
+   "x": 93.98,
+   "y": 157.48
+  },
+  {
+   "bit": 22,
+   "ref": "MX16",
+   "x": 72.39,
+   "y": 196.85
+  },
+  {
+   "bit": 23,
+   "ref": "MX7",
+   "x": 104.14,
+   "y": 176.53
+  }
+ ]
+};
+// END GEOMETRY
+
+/* ------------------------------------------------------------------ */
+/* Keys: matrix bit (row * 3 + col, as haxo-rs's keyscan numbers them) */
+/* to sax key. Names from haxo-rs's notemap.json fingerings; keycap    */
+/* colours from the haxo-hw photos.                                    */
+const KEYS = {
+  0:  { label: "8va",  name: "Octave key (thumb, on the back)", cap: "octave", place: "back" },
+  1:  { label: "fr F", name: "Front F", cap: "purple" },
+  4:  { label: "bis",  name: "Bis B♭", cap: "orange" },
+  7:  { label: "L1",   name: "Left hand 1 (B)", cap: "orange" },
+  10: { label: "L2",   name: "Left hand 2 (A)", cap: "orange" },
+  13: { label: "L3",   name: "Left hand 3 (G)", cap: "orange" },
+  16: { label: "R1",   name: "Right hand 1 (F)", cap: "blue" },
+  19: { label: "R2",   name: "Right hand 2 (E)", cap: "blue" },
+  22: { label: "R3",   name: "Right hand 3 (D)", cap: "blue" },
+  14: { label: "G♯",   name: "G♯ (left pinky)", cap: "black", wide: true },
+  20: { label: "B",    name: "Low B (left pinky)", cap: "blue" },
+  17: { label: "C♯",   name: "Low C♯ (left pinky)", cap: "blue" },
+  23: { label: "B♭",   name: "Low B♭ (left pinky)", cap: "black", wide: true },
+  12: { label: "F♯",   name: "Alternate F♯", cap: "purple" },
+  15: { label: "E♭",   name: "Low E♭ (right pinky)", cap: "yellow" },
+  18: { label: "C",    name: "Low C (right pinky)", cap: "yellow" },
+  // Right-hand side keys (RHK panel), mounted edge-on on the left.
+  3:  { label: "E",    name: "Side high E", cap: "green", place: "rhk" },
+  6:  { label: "C",    name: "Side C", cap: "green", place: "rhk" },
+  9:  { label: "B♭",   name: "Side B♭", cap: "green", place: "rhk" },
+  // Left-hand palm keys (LHP panel), mounted edge-on at the top right.
+  2:  { label: "E♭",   name: "Palm E♭", cap: "pink", place: "lhp" },
+  5:  { label: "D",    name: "Palm D", cap: "pink", place: "lhp" },
+  8:  { label: "F",    name: "Palm F", cap: "pink", place: "lhp" },
+};
+
+/* haxo-rs notemap.json (schlarpc/haxo-rs 9e06de6): key bitmask -> MIDI. */
+const NOTEMAP = {"0":73,"1":85,"32":74,"33":86,"37":87,"45":88,"128":71,"129":83,"144":70,"145":82,"192":72,"193":84,"208":72,"209":84,"297":89,"301":89,"1024":72,"1025":84,"1152":69,"1153":81,"1168":69,"1169":81,"1664":70,"1665":82,"9344":67,"9345":79,"9360":67,"9361":79,"25728":68,"25729":80,"25744":68,"25745":80,"65664":70,"65665":82,"66051":90,"74880":65,"74881":77,"74896":65,"74897":77,"78976":66,"78977":78,"78992":66,"78993":78,"524416":70,"524417":82,"533632":66,"533633":78,"533648":66,"533649":78,"599168":64,"599169":76,"599184":64,"599185":76,"4793472":62,"4793473":74,"4793488":62,"4793489":74,"4826240":63,"4826241":75,"4826256":63,"4826257":75,"5055616":60,"5055632":60,"5186688":61,"5186704":61,"6104192":59,"6104208":59,"13444224":58,"13444240":58};
+
+const NOTE_NAMES = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "G♯", "A", "B♭", "B"];
+const noteName = (m) => NOTE_NAMES[m % 12] + (Math.floor(m / 12) - 1);
+const BREATH_THRESHOLD = 10; // CC2 below this is "not blowing"
+
+/* ------------------------------------------------------------------ */
+/* API. The real backend (docs/webui.md) serves the same shapes over   */
+/* REST and two WebSockets; createMockApi() fakes all of it here.      */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function createMockApi() {
+  const listeners = new Set();
+  const live = { keys: 0, breath: 0, note: null };
+  const emit = () => listeners.forEach((fn) => fn({ ...live }));
+
+  // Fingerings the demo tune uses: the plainest map entry for each note.
+  const fingeringFor = {};
+  for (const [mask, midi] of Object.entries(NOTEMAP)) {
+    const m = Number(mask);
+    const bits = m.toString(2).split("1").length - 1;
+    if (!(midi in fingeringFor) || bits < fingeringFor[midi].bits) fingeringFor[midi] = { mask: m, bits };
+  }
+  // A blues lick in written pitch: notes, beats.
+  const TUNE = [
+    [67, 1], [70, 0.5], [72, 0.5], [73, 1], [72, 0.5], [70, 0.5], [67, 1.5], [null, 0.5],
+    [65, 0.5], [67, 0.5], [70, 1], [67, 0.5], [65, 0.5], [62, 2], [null, 1],
+    [74, 0.5], [77, 0.5], [79, 1], [77, 0.5], [74, 0.5], [72, 1], [70, 0.5], [67, 2.5], [null, 1],
+  ];
+  let demoTimer = null, demoStep = 0, breathTimer = null, manualBreath = 70;
+
+  function setLive(keys, breath) {
+    live.keys = keys;
+    live.breath = breath;
+    const midi = NOTEMAP[String(keys)];
+    live.note = midi === undefined || breath < BREATH_THRESHOLD ? null : midi;
+    emit();
+  }
+
+  function playDemo() {
+    const beat = 340;
+    const [midi, beats] = TUNE[demoStep % TUNE.length];
+    demoStep++;
+    clearInterval(breathTimer);
+    const keys = midi == null ? live.keys : fingeringFor[midi].mask;
+    const t0 = performance.now(), dur = beats * beat;
+    if (midi == null) {
+      setLive(keys, 0);
+    } else {
+      // A breath envelope: quick attack, a little swell, a soft release.
+      breathTimer = setInterval(() => {
+        const t = (performance.now() - t0) / dur;
+        const env = Math.min(1, t * 8) * (0.82 + 0.18 * Math.sin(t * Math.PI)) * (t > 0.88 ? (1 - t) / 0.12 : 1);
+        setLive(keys, Math.max(0, Math.round(env * 96)));
+      }, 16);
+    }
+    demoTimer = setTimeout(playDemo, dur);
+  }
+
+  const wifi = {
+    current: { ssid: "Green Room", signal: -54, address: "192.168.4.37", security: "WPA2" },
+    saved: [{ ssid: "Green Room" }, { ssid: "Home Studio" }],
+    nearby: [
+      { ssid: "Green Room", signal: -54, security: "WPA2" },
+      { ssid: "Venue-Guest", signal: -61, security: "open" },
+      { ssid: "Pixel 8 hotspot", signal: -48, security: "WPA3" },
+      { ssid: "eduroam", signal: -72, security: "802.1X" },
+      { ssid: "NETGEAR48", signal: -83, security: "WPA2" },
+    ],
+  };
+  const bt = {
+    adapter: { powered: true, name: "haxophone", address: "B8:27:EB:4A:91:0C", discoverable: false },
+    paired: [{ address: "F8:5C:7D:12:40:9E", name: "JBL Flip 6", connected: true, codec: "SBC-XQ" }],
+    nearby: [
+      { address: "00:02:5B:01:22:7A", name: "Creative BT-W5", codecs: ["aptX LL", "aptX", "SBC"] },
+      { address: "70:BF:92:33:0E:51", name: "Sony SRS-XB13", codecs: ["AAC", "SBC"] },
+      { address: "4C:87:5D:A1:6B:02", name: null, codecs: ["SBC"] },
+    ],
+  };
+  const sounds = {
+    files: [
+      { name: "GeneralUser-GS.sf2", size: 31_256_000, presets: 259, builtin: true },
+      { name: "Mister_Tenor_Sax.sf2", size: 8_700_000, presets: 4, builtin: false },
+      { name: "TimGM6mb.sf2", size: 5_970_000, presets: 128, builtin: false },
+    ],
+    active: "Mister_Tenor_Sax.sf2",
+    preset: 0,
+    transpose: 0,
+    volume: 60,
+    storage: { used: 7.4e9, total: 119.4e9 },
+  };
+  const presetNames = (file) =>
+    file.startsWith("Mister")
+      ? ["Tenor Sax (breathy)", "Tenor Sax (bright)", "Tenor Sax (sub-tone)", "Tenor Sax (growl)"]
+      : ["Acoustic Grand", "Bright Piano", "Electric Grand", "Honky-tonk", "Tenor Sax", "Alto Sax", "Soprano Sax", "Baritone Sax", "Clarinet", "Flute"];
+
+  const copy = (x) => JSON.parse(JSON.stringify(x));
+
+  return {
+    // WS /api/live
+    live: {
+      subscribe(fn) { listeners.add(fn); fn({ ...live }); return () => listeners.delete(fn); },
+      // Demo input: the real board reports its own keys; this is for the spike.
+      startDemo() { clearTimeout(demoTimer); playDemo(); },
+      stopDemo() { clearTimeout(demoTimer); clearInterval(breathTimer); setLive(live.keys, 0); },
+      press(keys) { setLive(keys, manualBreath); },
+      breathe(v) { manualBreath = v; setLive(live.keys, v); },
+    },
+    // GET /api/wifi, POST /api/wifi/scan, POST /api/wifi/connect, DELETE /api/wifi/saved/:ssid
+    wifi: {
+      async status() { await sleep(120); return copy({ current: wifi.current, saved: wifi.saved }); },
+      async scan() { await sleep(1400); return copy(wifi.nearby); },
+      async connect(ssid, psk, save) {
+        await sleep(1800);
+        const net = wifi.nearby.find((n) => n.ssid === ssid);
+        if (net.security !== "open" && (!psk || psk.length < 8)) throw new Error("The passphrase needs at least 8 characters.");
+        if (psk === "wrongpassword") throw new Error(`${ssid} rejected the passphrase. Check it and try again.`);
+        wifi.current = { ssid, signal: net.signal, address: "10.0.0." + (20 + Math.floor(Math.random() * 200)), security: net.security };
+        if (save && !wifi.saved.some((s) => s.ssid === ssid)) wifi.saved.push({ ssid });
+        return copy(wifi.current);
+      },
+      async forget(ssid) { await sleep(300); wifi.saved = wifi.saved.filter((s) => s.ssid !== ssid); },
+    },
+    // GET /api/bluetooth, POST /api/bluetooth/scan, POST .../:addr/{pair,connect,disconnect}, DELETE .../:addr
+    bluetooth: {
+      async status() { await sleep(120); return copy({ adapter: bt.adapter, paired: bt.paired }); },
+      async scan() { await sleep(2200); return copy(bt.nearby.filter((n) => !bt.paired.some((p) => p.address === n.address))); },
+      async pair(address) {
+        await sleep(2000);
+        const d = bt.nearby.find((n) => n.address === address);
+        bt.paired.forEach((p) => (p.connected = false));
+        bt.paired.push({ address, name: d.name || address, connected: true, codec: d.codecs[0] });
+      },
+      async setConnected(address, on) {
+        await sleep(900);
+        bt.paired.forEach((p) => (p.connected = p.address === address ? on : on ? false : p.connected));
+      },
+      async remove(address) { await sleep(400); bt.paired = bt.paired.filter((p) => p.address !== address); },
+      async setDiscoverable(on) { await sleep(200); bt.adapter.discoverable = on; },
+    },
+    // GET /api/soundfonts, PUT/DELETE /api/soundfonts/:name, PATCH /api/instrument
+    sounds: {
+      async status() { await sleep(120); return copy(sounds); },
+      presets: (file) => presetNames(file),
+      async upload(file) {
+        await sleep(600 + Math.min(2500, file.size / 20000));
+        sounds.files = sounds.files.filter((f) => f.name !== file.name);
+        sounds.files.push({ name: file.name, size: file.size, presets: 1, builtin: false });
+        sounds.storage.used += file.size;
+      },
+      async remove(name) {
+        await sleep(300);
+        const f = sounds.files.find((x) => x.name === name);
+        sounds.files = sounds.files.filter((x) => x.name !== name);
+        sounds.storage.used -= f.size;
+        if (sounds.active === name) { sounds.active = "GeneralUser-GS.sf2"; sounds.preset = 66; }
+      },
+      async update(patch) { await sleep(150); Object.assign(sounds, patch); return copy(sounds); },
+    },
+  };
+}
+
+const api = createMockApi();
+
+/* ------------------------------------------------------------------ */
+/* Small helpers */
+const $ = (s) => document.querySelector(s);
+const el = (tag, attrs = {}, ...kids) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") n.className = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else if (v === true) n.setAttribute(k, "");
+    else if (v !== false && v != null) n.setAttribute(k, v);
+  }
+  for (const k of kids.flat()) if (k != null) n.append(k.nodeType ? k : document.createTextNode(k));
+  return n;
+};
+const svgEl = (tag, attrs = {}) => {
+  const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  return n;
+};
+let toastTimer;
+function toast(msg) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.hidden = true), 2600);
+}
+const mb = (b) => (b / 1e6).toFixed(1) + " MB";
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+
+/* ------------------------------------------------------------------ */
+/* Tabs */
+const tabs = [...document.querySelectorAll('[role="tab"]')];
+function selectTab(id, focus) {
+  for (const t of tabs) {
+    const on = t.getAttribute("aria-controls") === id;
+    t.setAttribute("aria-selected", on);
+    t.tabIndex = on ? 0 : -1;
+    document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+    if (on && focus) t.focus();
+  }
+  store.set("haxo-tab", id);
+  if (id === "wifi") renderWifi();
+  if (id === "bluetooth") renderBt();
+  if (id === "sounds") renderSounds();
+}
+tabs.forEach((t, i) => {
+  t.addEventListener("click", () => selectTab(t.getAttribute("aria-controls")));
+  t.addEventListener("keydown", (e) => {
+    const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+    if (d) selectTab(tabs[(i + d + tabs.length) % tabs.length].getAttribute("aria-controls"), true);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Status chips */
+const statusState = { wifi: "Green Room", bt: "JBL Flip 6" };
+function renderStatus(patch = {}) {
+  Object.assign(statusState, patch);
+  const extra = statusState;
+  const s = $("#status");
+  s.replaceChildren(
+    el("span", { class: "chip demo", title: "No board: the page simulates one" }, el("span", { class: "dot" }), "demo board"),
+    el("span", { class: "chip " + (extra.wifi ? "good" : "warn") }, el("span", { class: "dot" }), extra.wifi || "no Wi-Fi"),
+    el("span", { class: "chip " + (extra.bt ? "good" : "") }, el("span", { class: "dot" }), extra.bt || "no speaker"),
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Board drawing */
+const CAP_W = 17.4, CAP_R = 2.2;
+const keyNodes = {};
+function drawBoard() {
+  const svg = $("#board");
+  if (!GEOMETRY) {
+    svg.setAttribute("viewBox", "0 0 100 30");
+    svg.append(svgEl("text", { x: 50, y: 16, "text-anchor": "middle", fill: "currentColor", "font-size": 4 }));
+    svg.lastChild.textContent = "Run webui/tools/gen-geometry.py to draw the board.";
+    return;
+  }
+  $("#geo-source").textContent = GEOMETRY.source;
+  svg.setAttribute("viewBox", "14 40 134 222");
+  const defs = svgEl("defs");
+  const clip = svgEl("clipPath", { id: "main-panel" });
+  clip.append(svgEl("path", { d: "M0 0 H200 V300 H0 Z " + GEOMETRY.clip, "clip-rule": "evenodd" }));
+  defs.append(clip);
+  svg.append(defs);
+
+  // Main panel: solder mask with a darker edge.
+  svg.append(svgEl("path", {
+    d: GEOMETRY.outline, "fill-rule": "evenodd", "clip-path": "url(#main-panel)",
+    fill: "var(--pcb)", stroke: "var(--pcb-edge)", "stroke-width": 0.8,
+  }));
+  // Silkscreen, as on the board.
+  const silk = svgEl("text", { x: 104, y: 192.5, "text-anchor": "middle", fill: "var(--silk)", opacity: 0.7, "font-size": 3, "font-family": "var(--font-data)" });
+  silk.textContent = "haxo v0.5";
+  svg.append(silk);
+  const lhpSilk = svgEl("text", { x: 120, y: 51, "text-anchor": "end", fill: "var(--silk)", opacity: 0.7, "font-size": 2.6, "font-family": "var(--font-data)" });
+  lhpSilk.textContent = "LHP->";
+  svg.append(lhpSilk);
+
+  const pos = Object.fromEntries(GEOMETRY.keys.map((k) => [k.bit, k]));
+  // Side panels mount at right angles; draw their keys edge-on where they
+  // sit when assembled (approximated from haxo-hw's photos).
+  const sideSpots = {
+    3: { x: 47.5, y: 114 }, 6: { x: 47.5, y: 133 }, 9: { x: 47.5, y: 152 },
+    2: { x: 127.5, y: 54 }, 5: { x: 127.5, y: 71 }, 8: { x: 127.5, y: 88 },
+  };
+
+  for (const [bitStr, k] of Object.entries(KEYS)) {
+    const bit = Number(bitStr);
+    const g = svgEl("g", { class: "key", role: "button", tabindex: 0, "aria-pressed": "false", "aria-label": k.name, "data-bit": bit });
+    const title = svgEl("title"); title.textContent = `${k.name} · bit ${bit}`;
+    g.append(title);
+    let x, y, w, h, tx, ty, anchor = "middle", labelInside = true;
+    if (k.place === "rhk" || k.place === "lhp") {
+      ({ x, y } = sideSpots[bit]);
+      w = 6; h = 15;
+      labelInside = false;
+      tx = k.place === "rhk" ? x - 5.5 : x + 5.5;
+      ty = y + 1.2;
+      anchor = k.place === "rhk" ? "end" : "start";
+    } else if (k.place === "back") {
+      // On the back, under the left thumb: drawn beside the panel.
+      x = 38; y = 98; w = 13; h = 13;
+      tx = x; ty = y + 1.2;
+    } else {
+      x = pos[bit].x; y = pos[bit].y;
+      w = k.wide ? CAP_W * 2 + 1.6 : CAP_W; h = CAP_W;
+      tx = x; ty = y + 1.2;
+    }
+    const cap = svgEl("rect", {
+      class: "cap", x: x - w / 2, y: y - h / 2, width: w, height: h,
+      rx: k.place ? 3 : CAP_R, "stroke-width": 0.6,
+      ...(k.place === "back" ? { "stroke-dasharray": "1.6 1.2" } : {}),
+    });
+    const label = svgEl("text", {
+      x: tx, y: ty, "text-anchor": anchor, "font-size": k.place ? 3.4 : 3.8,
+      "font-family": "var(--font-data)", "font-weight": 700, "pointer-events": "none",
+    });
+    label.textContent = k.label;
+    g.append(cap, label);
+    if (k.place === "back") {
+      const sub = svgEl("text", { x: tx, y: y + 10.5, "text-anchor": "middle", "font-size": 2.6, fill: "var(--muted)", "font-family": "var(--font-data)" });
+      sub.textContent = "back";
+      g.append(sub);
+    }
+    svg.append(g);
+    keyNodes[bit] = { g, cap, label, k, labelInside };
+    g.addEventListener("pointerdown", (e) => { e.preventDefault(); toggleKey(bit); });
+    g.addEventListener("keydown", (e) => {
+      if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggleKey(bit); }
+    });
+  }
+}
+
+const capColor = (k) => `var(--cap-${k.cap})`;
+// Keycaps are coloured on the real instrument, so unpressed keys keep their
+// colour, dimmed; a pressed key lights up fully with a silkscreen-white rim.
+function paintKeys(mask) {
+  for (const [bit, n] of Object.entries(keyNodes)) {
+    const on = ((mask >> Number(bit)) & 1) === 1;
+    const black = n.k.cap === "black";
+    n.g.setAttribute("aria-pressed", on ? "true" : "false");
+    n.cap.setAttribute("fill", on && black ? "#e9ece9" : capColor(n.k));
+    n.cap.setAttribute("fill-opacity", on ? 1 : black ? 0.9 : 0.32);
+    n.cap.setAttribute("stroke", on ? "var(--silk)" : black ? "#5b625e" : capColor(n.k));
+    n.cap.setAttribute("stroke-width", on ? 1 : 0.6);
+    n.label.setAttribute("fill", n.labelInside ? (on ? "#111512" : "var(--silk)") : on ? "var(--ink)" : "var(--muted)");
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Play: live state */
+let mode = "demo";
+let currentKeys = 0;
+function toggleKey(bit) {
+  if (mode !== "manual") setMode("manual");
+  currentKeys ^= 1 << bit;
+  api.live.press(currentKeys);
+}
+function setMode(m) {
+  mode = m;
+  $("#mode-demo").setAttribute("aria-pressed", m === "demo");
+  $("#mode-manual").setAttribute("aria-pressed", m === "manual");
+  $("#breath-manual").hidden = m !== "manual";
+  if (m === "demo") api.live.startDemo();
+  else { api.live.stopDemo(); api.live.breathe(Number($("#breath-input").value)); }
+}
+$("#mode-demo").addEventListener("click", () => setMode("demo"));
+$("#mode-manual").addEventListener("click", () => setMode("manual"));
+$("#breath-input").addEventListener("input", (e) => api.live.breathe(Number(e.target.value)));
+
+let liveState = { keys: 0, breath: 0, note: null };
+api.live.subscribe((s) => {
+  liveState = s;
+  currentKeys = s.keys;
+});
+function renderLive() {
+  const s = liveState;
+  paintKeys(s.keys);
+  $("#fingering").textContent = "keys 0x" + s.keys.toString(16).padStart(6, "0");
+  const known = NOTEMAP[String(s.keys)] !== undefined;
+  const midi = known ? NOTEMAP[String(s.keys)] : null;
+  const note = $("#note");
+  if (midi == null) {
+    note.textContent = "—";
+    note.classList.add("none");
+    $("#midi").textContent = "no fingering";
+  } else {
+    note.textContent = noteName(midi);
+    note.classList.toggle("none", s.note == null);
+    $("#midi").textContent = midi;
+  }
+  $("#breath-val").textContent = s.breath;
+  $("#breath-fill").style.width = (s.breath / 127) * 100 + "%";
+  requestAnimationFrame(renderLive);
+}
+
+/* ------------------------------------------------------------------ */
+/* Audio tap. Mock: a breath-driven synth in the browser. Real: PCM from */
+/* WS /api/audio into an AudioWorklet (docs/webui.md).                  */
+const audio = { ctx: null, osc: null, filter: null, amp: null, analyser: null, out: null, on: false };
+function startAudio() {
+  const ctx = (audio.ctx ||= new AudioContext());
+  if (!audio.osc) {
+    audio.osc = ctx.createOscillator();
+    audio.osc.type = "sawtooth";
+    const sub = ctx.createOscillator();
+    sub.type = "square";
+    const subGain = ctx.createGain();
+    subGain.gain.value = 0.18;
+    audio.sub = sub;
+    audio.filter = ctx.createBiquadFilter();
+    audio.filter.type = "lowpass";
+    audio.filter.Q.value = 4;
+    audio.amp = ctx.createGain();
+    audio.amp.gain.value = 0;
+    audio.out = ctx.createGain();
+    audio.analyser = ctx.createAnalyser();
+    audio.analyser.fftSize = 1024;
+    audio.osc.connect(audio.filter);
+    sub.connect(subGain).connect(audio.filter);
+    audio.filter.connect(audio.amp).connect(audio.out).connect(audio.analyser).connect(ctx.destination);
+    audio.osc.start();
+    sub.start();
+  }
+  audio.out.gain.value = 1;
+  ctx.resume();
+  audio.on = true;
+}
+function stopAudio() {
+  if (audio.out) audio.out.gain.value = 0;
+  audio.on = false;
+}
+$("#listen").addEventListener("click", () => {
+  if (audio.on) { stopAudio(); $("#listen").textContent = "Listen"; }
+  else { startAudio(); $("#listen").textContent = "Stop"; }
+});
+let volume = 0.6;
+function driveAudio() {
+  if (audio.ctx && audio.osc) {
+    const t = audio.ctx.currentTime, s = liveState;
+    if (s.note != null) {
+      // Written pitch to concert: a B♭ instrument sounds a tone lower.
+      const f = 440 * Math.pow(2, (s.note + transposeSemis - 69) / 12);
+      audio.osc.frequency.setTargetAtTime(f, t, 0.008);
+      audio.sub.frequency.setTargetAtTime(f / 2, t, 0.008);
+    }
+    const b = s.note == null ? 0 : s.breath / 127;
+    audio.amp.gain.setTargetAtTime(b * b * 0.35 * volume, t, 0.015);
+    audio.filter.frequency.setTargetAtTime(500 + b * 3800, t, 0.02);
+  }
+  drawScope();
+  requestAnimationFrame(driveAudio);
+}
+const scope = $("#scope"), sctx = scope.getContext("2d");
+const scopeBuf = new Float32Array(1024);
+function drawScope() {
+  const w = scope.width, h = scope.height;
+  const cs = getComputedStyle(document.documentElement);
+  sctx.fillStyle = cs.getPropertyValue("--pcb").trim() || "#1a2621";
+  sctx.fillRect(0, 0, w, h);
+  sctx.strokeStyle = "rgba(255,255,255,0.08)";
+  sctx.lineWidth = 1;
+  for (let i = 1; i < 4; i++) { sctx.beginPath(); sctx.moveTo(0, (h * i) / 4); sctx.lineTo(w, (h * i) / 4); sctx.stroke(); }
+  let peak = 0;
+  if (audio.on && audio.analyser) {
+    audio.analyser.getFloatTimeDomainData(scopeBuf);
+    sctx.strokeStyle = cs.getPropertyValue("--cap-green").trim() || "#2ea377";
+    sctx.lineWidth = 2;
+    sctx.beginPath();
+    for (let i = 0; i < scopeBuf.length; i++) {
+      const v = scopeBuf[i];
+      peak = Math.max(peak, Math.abs(v));
+      const x = (i / (scopeBuf.length - 1)) * w, y = h / 2 - v * h * 0.9;
+      i ? sctx.lineTo(x, y) : sctx.moveTo(x, y);
+    }
+    sctx.stroke();
+    const db = peak > 0 ? 20 * Math.log10(peak) : -Infinity;
+    $("#level-val").textContent = isFinite(db) ? db.toFixed(0) + " dBFS" : "silent";
+    $("#level-fill").style.width = Math.max(0, Math.min(100, ((db + 60) / 60) * 100)) + "%";
+  } else {
+    sctx.fillStyle = "rgba(255,255,255,0.45)";
+    sctx.font = "13px " + (cs.getPropertyValue("--font-data") || "monospace");
+    sctx.textAlign = "center";
+    sctx.fillText("tap off · press Listen", w / 2, h / 2 + 4);
+    $("#level-val").textContent = "off";
+    $("#level-fill").style.width = "0%";
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Wi-Fi */
+const wifiUi = { nearby: null, scanning: false, open: null, busy: null, error: null };
+function bars(dbm) {
+  const n = dbm > -55 ? 4 : dbm > -65 ? 3 : dbm > -75 ? 2 : 1;
+  return el("span", { class: "bars", "aria-label": `signal ${n} of 4` },
+    [1, 2, 3, 4].map((i) => el("i", { class: i <= n ? "on" : "", style: `height:${4 + i * 3}px` })));
+}
+async function renderWifi() {
+  const st = await api.wifi.status();
+  const cur = st.current;
+  $("#wifi-current").replaceChildren(
+    el("h2", { style: "margin:0" }, "Connected"),
+    cur
+      ? el("div", { class: "row" },
+          bars(cur.signal),
+          el("div", {}, el("div", { class: "name", style: "font-weight:700;font-size:18px" }, cur.ssid),
+            el("div", { class: "hint mono" }, `${cur.address} · ${cur.signal} dBm · ${cur.security}`)),
+        )
+      : el("p", { class: "empty" }, "Not connected. The USB link still works."),
+    el("p", { class: "hint" }, "Reach this page at ", el("span", { class: "mono" }, "haxophone.local"), " on this network, or at ", el("span", { class: "mono" }, "10.68.0.1"), " over USB."),
+  );
+  renderStatus({ wifi: cur ? cur.ssid : null });
+  const saved = $("#wifi-saved");
+  saved.replaceChildren(...(st.saved.length ? st.saved.map((s) =>
+    el("div", { class: "item" },
+      el("span", { class: "glyph" }, "◆"),
+      el("div", {}, el("div", { class: "name" }, s.ssid),
+        el("div", { class: "sub" }, cur && cur.ssid === s.ssid ? "connected now" : "joins when in range")),
+      el("div", { class: "actions" },
+        el("button", { class: "btn small danger", onclick: async (e) => {
+          e.target.disabled = true;
+          await api.wifi.forget(s.ssid);
+          toast(`Forgot ${s.ssid}`);
+          renderWifi();
+        } }, "Forget")),
+    )) : [el("p", { class: "empty" }, "No saved networks.")]));
+  renderNearby();
+}
+function renderNearby() {
+  const box = $("#wifi-nearby");
+  if (wifiUi.scanning) { box.replaceChildren(el("p", { class: "empty" }, el("span", { class: "spin" }), " Scanning…")); return; }
+  if (!wifiUi.nearby) { box.replaceChildren(el("p", { class: "empty" }, "Scan to list networks in range.")); return; }
+  box.replaceChildren(...wifiUi.nearby.map((n) => {
+    const open = wifiUi.open === n.ssid;
+    const unsupported = n.security === "802.1X";
+    const item = el("div", { class: "item" },
+      bars(n.signal),
+      el("div", {}, el("div", { class: "name" }, n.ssid),
+        el("div", { class: "sub" }, n.security === "open" ? "open network" : n.security, ` · ${n.signal} dBm`)),
+      el("div", { class: "actions" },
+        unsupported
+          ? el("span", { class: "pill muted", title: "Enterprise networks need a certificate setup the board doesn't have" }, "not supported")
+          : el("button", { class: "btn small" + (open ? "" : " primary"), onclick: () => { wifiUi.open = open ? null : n.ssid; wifiUi.error = null; renderNearby(); } }, open ? "Cancel" : "Connect")),
+    );
+    if (open) {
+      const pskId = "psk-" + n.ssid.replace(/\W/g, "_");
+      const saveId = "save-" + n.ssid.replace(/\W/g, "_");
+      const form = el("form", { class: "expand", onsubmit: async (e) => {
+        e.preventDefault();
+        wifiUi.busy = n.ssid; wifiUi.error = null; renderNearby();
+        try {
+          const psk = n.security === "open" ? null : form.querySelector("#" + pskId).value;
+          const save = form.querySelector("#" + saveId).checked;
+          await api.wifi.connect(n.ssid, psk, save);
+          wifiUi.open = null;
+          toast(`Connected to ${n.ssid}` + (save ? " and saved" : ""));
+          renderWifi();
+        } catch (err) {
+          wifiUi.error = err.message;
+        } finally {
+          wifiUi.busy = null;
+          renderNearby();
+        }
+      } },
+        n.security === "open" ? null : el("label", { class: "field", for: pskId }, "Passphrase",
+          el("input", { type: "password", id: pskId, autocomplete: "off", minlength: 8, required: true, placeholder: "8–63 characters" })),
+        el("label", { class: "row", style: "gap:8px;font-size:14px" },
+          el("input", { type: "checkbox", id: saveId, checked: true }), "Save to the card, join at every boot"),
+        wifiUi.error ? el("p", { class: "hint", style: "color:var(--bad)" }, wifiUi.error) : null,
+        el("div", { class: "row" },
+          el("button", { class: "btn primary", type: "submit", disabled: wifiUi.busy === n.ssid },
+            wifiUi.busy === n.ssid ? [el("span", { class: "spin" }), "Connecting…"] : "Join " + n.ssid),
+          el("span", { class: "hint" }, "Connecting over Wi-Fi drops this page for a moment if you're on Wi-Fi now.")),
+      );
+      item.append(form);
+    }
+    return item;
+  }));
+}
+$("#wifi-scan").addEventListener("click", async () => {
+  wifiUi.scanning = true; renderNearby();
+  $("#wifi-scan").disabled = true;
+  wifiUi.nearby = await api.wifi.scan();
+  wifiUi.scanning = false;
+  $("#wifi-scan").disabled = false;
+  renderNearby();
+});
+
+/* ------------------------------------------------------------------ */
+/* Bluetooth */
+const btUi = { nearby: null, scanning: false, busy: null };
+let btConnectedName = null;
+async function renderBt() {
+  const st = await api.bluetooth.status();
+  const a = st.adapter;
+  const connected = st.paired.find((p) => p.connected);
+  btConnectedName = connected ? connected.name : null;
+  $("#bt-adapter").replaceChildren(
+    el("div", { class: "row" },
+      el("h2", { style: "margin:0" }, "This haxophone"),
+      el("span", { class: "spacer" }),
+      el("span", { class: "pill " + (a.powered ? "good" : "muted") }, a.powered ? "radio on" : "radio off")),
+    el("div", { class: "row" },
+      el("div", {}, el("div", { class: "name", style: "font-weight:700;font-size:18px" }, a.name),
+        el("div", { class: "hint mono" }, a.address, " · Bluetooth 4.2")),
+    ),
+    el("label", { class: "row", style: "gap:8px;font-size:14px" },
+      el("input", { type: "checkbox", id: "bt-discoverable", checked: a.discoverable, onchange: async (e) => {
+        await api.bluetooth.setDiscoverable(e.target.checked);
+        toast(e.target.checked ? "Visible to nearby devices for 3 minutes" : "Hidden from nearby devices");
+      } }), "Visible to phones and computers (for MIDI, later)"),
+    el("p", { class: "hint" }, "Audio goes to one speaker at a time. Players hear the in-ear jack, which never waits on Bluetooth."),
+  );
+  renderStatus({ bt: btConnectedName });
+  const box = $("#bt-paired");
+  box.replaceChildren(...(st.paired.length ? st.paired.map((p) =>
+    el("div", { class: "item" },
+      el("span", { class: "glyph" }, p.connected ? "◉" : "○"),
+      el("div", {}, el("div", { class: "name" }, p.name),
+        el("div", { class: "sub" }, p.connected ? el("span", { class: "pill good" }, "playing · " + p.codec) : el("span", { class: "pill muted" }, "paired"), " ", el("span", { class: "mono" }, p.address))),
+      el("div", { class: "actions" },
+        btUi.busy === p.address ? el("span", { class: "spin" }) : null,
+        el("button", { class: "btn small", disabled: !!btUi.busy, onclick: async () => {
+          btUi.busy = p.address; renderBt();
+          await api.bluetooth.setConnected(p.address, !p.connected);
+          btUi.busy = null;
+          toast(p.connected ? `Disconnected ${p.name}` : `Playing through ${p.name}`);
+          renderBt();
+        } }, p.connected ? "Disconnect" : "Connect"),
+        el("button", { class: "btn small danger", disabled: !!btUi.busy, onclick: async () => {
+          await api.bluetooth.remove(p.address);
+          toast(`Removed ${p.name}`);
+          renderBt();
+        } }, "Remove")),
+    )) : [el("p", { class: "empty" }, "No speakers paired yet.")]));
+  renderBtNearby();
+}
+function renderBtNearby() {
+  const box = $("#bt-nearby");
+  if (btUi.scanning) { box.replaceChildren(el("p", { class: "empty" }, el("span", { class: "spin" }), " Looking for speakers…")); return; }
+  if (!btUi.nearby) { box.replaceChildren(el("p", { class: "empty" }, "Scan to find devices in pairing mode.")); return; }
+  if (!btUi.nearby.length) { box.replaceChildren(el("p", { class: "empty" }, "Nothing new found. Is the speaker in pairing mode?")); return; }
+  box.replaceChildren(...btUi.nearby.map((d) =>
+    el("div", { class: "item" },
+      el("span", { class: "glyph" }, "♪"),
+      el("div", {}, el("div", { class: "name" }, d.name || "Unnamed device"),
+        el("div", { class: "sub" }, ...d.codecs.map((c) => el("span", { class: "pill " + (/LL|FastStream/.test(c) ? "gold" : "muted"), style: "margin-right:4px" }, c)), " ", el("span", { class: "mono" }, d.address))),
+      el("div", { class: "actions" },
+        btUi.busy === d.address
+          ? el("span", { class: "hint" }, el("span", { class: "spin" }), " Pairing…")
+          : el("button", { class: "btn small primary", disabled: !!btUi.busy, onclick: async () => {
+              btUi.busy = d.address; renderBtNearby();
+              await api.bluetooth.pair(d.address);
+              btUi.busy = null;
+              btUi.nearby = btUi.nearby.filter((n) => n.address !== d.address);
+              toast(`Paired with ${d.name || d.address}`);
+              renderBt();
+            } }, "Pair")),
+    )));
+}
+$("#bt-scan").addEventListener("click", async () => {
+  btUi.scanning = true; renderBtNearby();
+  $("#bt-scan").disabled = true;
+  btUi.nearby = await api.bluetooth.scan();
+  btUi.scanning = false;
+  $("#bt-scan").disabled = false;
+  renderBtNearby();
+});
+
+/* ------------------------------------------------------------------ */
+/* Sounds */
+const sfUi = { confirm: null, uploading: [] };
+let transposeSemis = 0;
+async function renderSounds() {
+  const st = await api.sounds.status();
+  $("#sound-name").textContent = st.active.replace(/\.sf[23]$/, "");
+  const active = $("#sf-active");
+  active.replaceChildren(...st.files.map((f) => el("option", { value: f.name, selected: f.name === st.active }, f.name)));
+  const presets = api.sounds.presets(st.active);
+  $("#sf-preset").replaceChildren(...presets.map((p, i) => el("option", { value: i, selected: i === st.preset % presets.length }, `${String(i).padStart(3, "0")}  ${p}`)));
+  $("#transpose").value = String(st.transpose);
+  $("#volume").value = st.volume;
+  $("#volume-val").textContent = st.volume + "%";
+  const list = $("#sf-list");
+  list.replaceChildren(
+    ...st.files.map((f) => {
+      const confirming = sfUi.confirm === f.name;
+      return el("div", { class: "item" },
+        el("span", { class: "glyph" }, "sf" + (f.name.endsWith(".sf3") ? "3" : "2")),
+        el("div", {}, el("div", { class: "name mono" }, f.name),
+          el("div", { class: "sub" }, `${mb(f.size)} · ${f.presets} preset${f.presets === 1 ? "" : "s"} `,
+            f.name === st.active ? el("span", { class: "pill gold" }, "in use") : null,
+            f.builtin ? el("span", { class: "pill muted", style: "margin-left:4px" }, "built in") : null)),
+        el("div", { class: "actions" },
+          f.builtin ? null
+            : confirming
+              ? [el("button", { class: "btn small danger", onclick: async () => {
+                  await api.sounds.remove(f.name);
+                  sfUi.confirm = null;
+                  toast(`Deleted ${f.name}`);
+                  renderSounds();
+                } }, "Delete"),
+                 el("button", { class: "btn small", onclick: () => { sfUi.confirm = null; renderSounds(); } }, "Keep")]
+              : el("button", { class: "btn small", onclick: () => { sfUi.confirm = f.name; renderSounds(); } }, "Delete…")),
+      );
+    }),
+    ...sfUi.uploading.map((name) => el("div", { class: "item" },
+      el("span", { class: "spin" }),
+      el("div", {}, el("div", { class: "name mono" }, name), el("div", { class: "sub" }, "Uploading to the card…")),
+      el("span", {}))),
+  );
+  const pct = (st.storage.used / st.storage.total) * 100;
+  $("#storage-val").textContent = `${(st.storage.used / 1e9).toFixed(1)} of ${(st.storage.total / 1e9).toFixed(0)} GB used`;
+  $("#storage-fill").style.width = pct + "%";
+}
+$("#sf-active").addEventListener("change", async (e) => {
+  await api.sounds.update({ active: e.target.value, preset: 0 });
+  toast(`Loaded ${e.target.value}`);
+  renderSounds();
+});
+$("#sf-preset").addEventListener("change", (e) => api.sounds.update({ preset: Number(e.target.value) }));
+$("#transpose").addEventListener("change", async (e) => {
+  transposeSemis = Number(e.target.value);
+  $("#transpose-readout").textContent = transposeSemis > 0 ? "+" + transposeSemis : String(transposeSemis);
+  await api.sounds.update({ transpose: transposeSemis });
+});
+$("#volume").addEventListener("input", (e) => {
+  volume = Number(e.target.value) / 100;
+  $("#volume-val").textContent = e.target.value + "%";
+  api.sounds.update({ volume: Number(e.target.value) });
+});
+async function uploadFiles(files) {
+  const ok = [...files].filter((f) => /\.sf[23]$/i.test(f.name));
+  const skipped = files.length - ok.length;
+  if (skipped) toast(`Skipped ${skipped} file${skipped === 1 ? "" : "s"}: only .sf2 and .sf3 soundfonts`);
+  for (const f of ok) {
+    sfUi.uploading.push(f.name);
+    renderSounds();
+    await api.sounds.upload(f);
+    sfUi.uploading = sfUi.uploading.filter((n) => n !== f.name);
+    toast(`Uploaded ${f.name}`);
+    renderSounds();
+  }
+}
+$("#sf-file").addEventListener("change", (e) => { uploadFiles(e.target.files); e.target.value = ""; });
+const drop = $("#drop");
+drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); uploadFiles(e.dataTransfer.files); });
+
+/* ------------------------------------------------------------------ */
+/* Start */
+drawBoard();
+renderStatus();
+api.sounds.status().then((st) => { $("#sound-name").textContent = st.active.replace(/\.sf[23]$/, ""); });
+setMode("demo");
+requestAnimationFrame(renderLive);
+requestAnimationFrame(driveAudio);
+const savedTab = store.get("haxo-tab");
+const hashTab = location.hash.slice(1);
+selectTab(["play", "wifi", "bluetooth", "sounds"].includes(hashTab) ? hashTab : ["play", "wifi", "bluetooth", "sounds"].includes(savedTab) ? savedTab : "play");
+</script>

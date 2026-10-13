@@ -41,7 +41,9 @@ Roughly in order. Details are in the sections named.
 6. **Own render loop with the Bluetooth bridge** ("Outputs", build order
    step 3).
 7. **USB audio out** (UAC2, "TODO: USB audio out"), and the **web UI**
-   ("TODO: web UI"), which could edit the settings file on the card.
+   ("TODO: web UI"): a frontend spike with a mock backend is in
+   `webui/`, and its API contract in docs/webui.md; the backend and the
+   haxo-rs hooks it needs are next.
 
 ## Bootstrap (schlarpc-flake hosts/haxophone, 2026-10-12)
 
@@ -191,6 +193,9 @@ load. nixpkgs' fluidsynth has no PipeWire driver (JACK and PulseAudio only),
 which the own-loop design doesn't need.
 
 ## TODO: web UI (listen to the mix, change settings)
+
+Spike (2026-10-13): `webui/index.html`, frontend only with an in-page mock;
+the API it needs is in docs/webui.md.
 
 A web server on the board, reachable over the USB gadget and Wi-Fi
 (haxophone.local), with:
