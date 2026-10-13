@@ -1,0 +1,79 @@
+// The Haxophone HAT on the mainline Zero 2 W device tree: the MAX98357A on
+// I2S, with SD_MODE on GPIO4, the pressure sensor's I2C bus at 400 kHz, and
+// the OTG port fixed in peripheral mode.
+// Equivalent to the stock image's `dtoverlay=max98357a,sdmode-pin=4` and
+// `dtparam=i2c_arm_baudrate=400000`, which only exist for the rpi kernel.
+// Wiring from haxo-hw's haxophone001.kicad_sch: BCLK GPIO18, LRCLK GPIO19,
+// DOUT GPIO21.
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "raspberrypi,model-zero-2-w";
+
+	fragment@0 {
+		target = <&gpio>;
+		__overlay__ {
+			// Not the stock pcm_gpio18 group: that also takes GPIO20
+			// (PCM_DIN), which is row 4 of the HAT's key matrix.
+			haxo_i2s_pins: haxo-i2s-pins {
+				brcm,pins = <18 19 21>;
+				brcm,function = <4>; // ALT0
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <&i2s>;
+		__overlay__ {
+			#sound-dai-cells = <0>;
+			pinctrl-names = "default";
+			pinctrl-0 = <&haxo_i2s_pins>;
+			status = "okay";
+		};
+	};
+
+	fragment@2 {
+		target-path = "/";
+		__overlay__ {
+			max98357a: max98357a {
+				compatible = "maxim,max98357a";
+				#sound-dai-cells = <0>;
+				// The codec driver raises it while a stream runs and
+				// drops it afterwards, so the amp is off when idle.
+				sdmode-gpios = <&gpio 4 0>;
+			};
+
+			sound {
+				compatible = "simple-audio-card";
+				// haxo-rs finds its card by this name.
+				simple-audio-card,name = "MAX98357A";
+				simple-audio-card,format = "i2s";
+				simple-audio-card,cpu {
+					sound-dai = <&i2s>;
+				};
+				simple-audio-card,codec {
+					sound-dai = <&max98357a>;
+				};
+			};
+		};
+	};
+
+	fragment@3 {
+		target = <&i2c1>;
+		__overlay__ {
+			clock-frequency = <400000>;
+		};
+	};
+
+	fragment@4 {
+		target = <&usb>;
+		__overlay__ {
+			// The OTG port only ever faces a host. In the default "otg"
+			// mode dwc2 picks its role at runtime: re-probing the driver
+			// came back as a host, and every gadget rebind left the OUT
+			// endpoints stuck (ep_stop_xfr timeouts, host TX timeouts).
+			dr_mode = "peripheral";
+		};
+	};
+};
