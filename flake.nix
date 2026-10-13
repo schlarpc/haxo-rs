@@ -94,7 +94,7 @@
       # stall-prone gadget: `deploy .#haxophone --hostname haxophone.local`.
       deploy.nodes.haxophone = {
         hostname = "10.68.0.1";
-        sshUser = "schlarpc";
+        sshUser = "haxophone";
         fastConnection = true;
         profiles.system = {
           user = "root";

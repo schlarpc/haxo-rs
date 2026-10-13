@@ -54,8 +54,8 @@
         # MTP storage (gadget.nix).
         "/var/lib/haxophone"
         {
-          directory = "/home/schlarpc";
-          user = "schlarpc";
+          directory = "/home/haxophone";
+          user = "haxophone";
           group = "users";
           mode = "0700";
         }

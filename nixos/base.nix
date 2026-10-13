@@ -32,9 +32,11 @@
   # or autologin on the consoles.
   users.mutableUsers = false;
 
-  users.users.schlarpc = {
+  # The instrument's own user rather than a personal one; schlarpc's ssh
+  # keys log in to it.
+  users.users.haxophone = {
     isNormalUser = true;
-    description = "Chaz Schlarp";
+    description = "Haxophone";
     uid = 1000;
     extraGroups = [
       "wheel"

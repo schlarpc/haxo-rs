@@ -101,7 +101,7 @@ in
 
   # Login on the serial consoles. Anyone with the cable already has the SD
   # card.
-  services.getty.autologinUser = "schlarpc";
+  services.getty.autologinUser = "haxophone";
 
   services.openssh.enable = true;
 

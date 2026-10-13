@@ -68,7 +68,7 @@ What the "Decided" items below turned into. Not yet booted on the board.
 - **Root**: tmpfs, 128 MB. preservation (not impermanence; it is what
   schlarpc-flake's newer hosts use) keeps machine-id, the ed25519 host key
   (symlinked from the initrd, so agenix can decrypt during activation),
-  /var/lib/{nixos,systemd,bluetooth,haxophone} and /home/schlarpc. Only an
+  /var/lib/{nixos,systemd,bluetooth,haxophone} and /home/haxophone. Only an
   ed25519 host key is generated: an RSA one would change on every boot.
 - **Firmware**: only linux-firmware's `brcm/` and `cypress/` directories
   (the Wi-Fi blobs the bootstrap verified), not all of linux-firmware: the
@@ -76,8 +76,9 @@ What the "Decided" items below turned into. Not yet booted on the board.
 - **Journal**: volatile, 32 MB, so nothing survives a crash. Debug hangs
   live (over Wi-Fi) or on the UART.
 - **Users**: immutable (`users.mutableUsers = false`); /etc/shadow is
-  rebuilt every boot anyway. schlarpc only, ssh keys from
-  github.com/schlarpc.keys, autologin on the consoles.
+  rebuilt every boot anyway. One user, `haxophone` (uid 1000), with
+  schlarpc's ssh keys from github.com/schlarpc.keys, autologin on the
+  consoles, and the deploy user.
 - **Nix**: stock nixpkgs Nix, not Determinate (which the schlarpc-flake
   hosts get); nothing builds on the board.
 - **Minting** (packages/mint-sd.nix, see README.md): format the card in a
