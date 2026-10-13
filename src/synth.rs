@@ -7,6 +7,9 @@ use std::time::Duration;
 
 use crate::alsa;
 
+const AUDIO_DEVICE_POLL_MS: u64 = 250;
+const AUDIO_DEVICE_TIMEOUT_MS: u64 = 30_000;
+
 pub fn try_init(
     sf2file: &str,
     banknum: i32,
@@ -23,7 +26,18 @@ pub fn try_init(
         warn!("Setting audio.period-size in fluidsynth failed");
     }
 
-    let alsa_dev = alsa::get_device();
+    // The card can still be probing when we start at boot; wait for it
+    // rather than exit and lean on the service manager's restarts.
+    let mut alsa_dev = alsa::get_device();
+    let mut waited_ms = 0;
+    while alsa_dev.is_err() && waited_ms < AUDIO_DEVICE_TIMEOUT_MS {
+        if waited_ms == 0 {
+            info!("Waiting for the audio output device ...");
+        }
+        thread::sleep(Duration::from_millis(AUDIO_DEVICE_POLL_MS));
+        waited_ms += AUDIO_DEVICE_POLL_MS;
+        alsa_dev = alsa::get_device();
+    }
     if alsa_dev.is_err() {
         panic!("Failed to find audio output device");
     }
