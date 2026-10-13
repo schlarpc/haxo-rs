@@ -112,8 +112,21 @@
             src = inputs.haxo-rs;
           };
           umtprd = pkgs.callPackage ./packages/umtprd.nix { };
+          mint-sd = pkgs.callPackage ./packages/mint-sd.nix {
+            disko = inputs.disko.packages.${pkgs.stdenv.hostPlatform.system}.disko;
+            diskoFile = ./nixos/disko.nix;
+            toplevel = haxophone.config.system.build.toplevel;
+            hostName = haxophone.config.networking.hostName;
+          };
         }
       );
+
+      apps = forAllSystems (pkgs: {
+        mint-sd = {
+          type = "app";
+          program = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.mint-sd;
+        };
+      });
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShellNoCC {
