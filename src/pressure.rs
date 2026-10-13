@@ -1,5 +1,7 @@
 use std::cmp::min;
 use std::error::Error;
+use std::thread;
+use std::time::Duration;
 
 use log::{debug, error /* info, warn */};
 
@@ -7,6 +9,13 @@ use rppal::i2c::I2c;
 
 // Pressure sensor I2C address
 const ADDR_PRESSURE_SENSOR: u16 = 0x4D;
+
+// Readings averaged into the resting baseline at startup.
+const BASELINE_SAMPLES: i32 = 32;
+
+// Counts either side of the baseline treated as no breath. Resting noise
+// measured on a Zero 2 W spans about +/-8 counts around its mean.
+const NOISE_DEADZONE: i32 = 10;
 
 pub struct Pressure {
     i2c: rppal::i2c::I2c,
@@ -38,7 +47,16 @@ impl Pressure {
 
         debug!("I2C: slave address set to {}", ADDR_PRESSURE_SENSOR);
 
-        let baseline = Pressure::read_io(&mut i2c)?;
+        // Average the resting pressure over a few samples: a single reading
+        // is noisy enough (about +/-8 counts) that a low first sample leaves
+        // the breathless sensor above the baseline, and the main loop then
+        // retriggers the note on every tick.
+        let mut sum = 0;
+        for _ in 0..BASELINE_SAMPLES {
+            sum += Pressure::read_io(&mut i2c)?;
+            thread::sleep(Duration::from_millis(2));
+        }
+        let baseline = sum / BASELINE_SAMPLES;
 
         let sensor = Pressure {
             i2c: i2c,
@@ -52,10 +70,20 @@ impl Pressure {
 
     pub fn read(&mut self) -> Result<i32, Box<dyn Error>> {
         let pressure = Pressure::read_io(&mut self.i2c)?;
+        // Ignore sensor noise around the baseline, on both sides, so the
+        // negative-pressure gesture keeps working.
+        let delta = pressure - self.baseline;
+        let delta = if delta > NOISE_DEADZONE {
+            delta - NOISE_DEADZONE
+        } else if delta < -NOISE_DEADZONE {
+            delta + NOISE_DEADZONE
+        } else {
+            0
+        };
         // Compress the the range returned by the sensor to 0-127 required
         // for MIDI.  TODO:  Make this configurable
         const PRESSURE_SCALING_FACTOR: i32 = 6;
-        Ok(min((pressure - self.baseline) / PRESSURE_SCALING_FACTOR, 127))
+        Ok(min(delta / PRESSURE_SCALING_FACTOR, 127))
     }
 
     fn read_io(i2c: &mut rppal::i2c::I2c) -> Result<i32, Box<dyn Error>> {
