@@ -1,29 +1,47 @@
 use std::error::Error;
+use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 
-use rppal::gpio::Gpio;
-use rppal::gpio::Level;
+use gpiocdev::line::{Bias, Value, Values};
+use gpiocdev::Request;
 
 use static_assertions::const_assert;
 
-// BCM pin numbering
+// BCM pin numbering, which is also the line offset on gpiochip0
 const ROWS: [u8; 8] = [13, 12, 16, 17, 20, 22, 23, 24];
 const COLS: [u8; 3] = [25, 26, 27];
 
 const ROW_PULL_DOWN_TIME_US: u64 = 10;
 
+const GPIO_CHIP: &str = "/dev/gpiochip0";
+
+// One line request for the whole matrix, held for the life of the process:
+// rows driven high (idle), columns as inputs with pull-ups. This goes
+// through the kernel's GPIO character device, so it needs neither
+// /dev/gpiomem (rpi kernel only) nor /dev/mem, and nothing is mapped or
+// reopened per scan.
+static MATRIX: OnceLock<Request> = OnceLock::new();
+
+fn offsets(pins: &[u8]) -> Vec<u32> {
+    pins.iter().map(|p| *p as u32).collect()
+}
+
 pub fn init_io() -> Result<(), Box<dyn Error>> {
-    let gpio = Gpio::new()?;
-    for col in &COLS {
-        let mut pin = gpio.get(*col)?.into_input_pullup();
-        pin.set_reset_on_drop(false);
+    if MATRIX.get().is_some() {
+        return Ok(());
     }
-    for row in &ROWS {
-        let mut pin = gpio.get(*row)?.into_output();
-        pin.set_high();
-        pin.set_reset_on_drop(false);
-    }
+    let req = Request::builder()
+        .on_chip(GPIO_CHIP)
+        .with_consumer("haxo-keyscan")
+        .with_lines(&offsets(&ROWS))
+        .as_output(Value::Active)
+        .with_lines(&offsets(&COLS))
+        .as_input()
+        .with_bias(Bias::PullUp)
+        .request()?;
+    // A concurrent init (only tests do that) keeps the first request.
+    let _ = MATRIX.set(req);
     Ok(())
 }
 
@@ -41,37 +59,27 @@ fn set_bit_at(output: &mut u32, n: u8) {
     }
 }
 
-fn clear_bit_at(output: &mut u32, n: u8) {
-    if n < 32 {
-        *output &= !(1 << n);
-    }
-}
-
 pub fn scan() -> Result<u32, Box<dyn Error>> {
     const_assert!(ROWS.len() + COLS.len() <= 32);
-    let gpio = Gpio::new()?;
+    let req = MATRIX.get().ok_or("keyscan::init_io() was not called")?;
+    let col_offsets = offsets(&COLS);
+    let mut cols = Values::from_offsets(&col_offsets);
     let mut key_idx = 0;
     // a bit if set if the corresponding key is pressed
     let mut keymap: u32 = 0;
     for row in &ROWS {
-        let mut row_pin = gpio.get(*row)?.into_output();
-        row_pin.set_low();
+        let row = *row as u32;
+        req.set_value(row, Value::Inactive)?;
         thread::sleep(Duration::from_micros(ROW_PULL_DOWN_TIME_US));
 
-        for col in &COLS {
-            let col_pin = gpio.get(*col)?;
-            let is_pressed = col_pin.read() == Level::Low;
-
-            if get_bit_at(keymap, key_idx) != is_pressed {
-                if is_pressed {
-                    set_bit_at(&mut keymap, key_idx);
-                } else {
-                    clear_bit_at(&mut keymap, key_idx);
-                }
+        req.values(&mut cols)?;
+        for col in &col_offsets {
+            if cols.get(*col) == Some(Value::Inactive) {
+                set_bit_at(&mut keymap, key_idx);
             }
             key_idx += 1;
         }
-        row_pin.set_high();
+        req.set_value(row, Value::Active)?;
     }
     Ok(keymap)
 }
