@@ -59,8 +59,8 @@
 
   # Only the Broadcom/Cypress Wi-Fi firmware (brcmfmac, BCM43430/1), not all
   # of linux-firmware, which was 782 MB of a 2.7 GB closure. Same blobs the
-  # bootstrap image verified Wi-Fi with. linux-firmware has no Bluetooth
-  # patch file (BCM43430A1.hcd) for this chip, so this drops nothing there.
+  # bootstrap image verified Wi-Fi with. The Bluetooth patch file, which
+  # linux-firmware doesn't have, comes from bluetooth.nix.
   hardware.firmware = [
     (pkgs.runCommand "brcm-firmware" { } ''
       mkdir -p $out/lib/firmware

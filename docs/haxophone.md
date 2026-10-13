@@ -72,7 +72,8 @@ What the "Decided" items below turned into. Not yet booted on the board.
   ed25519 host key is generated: an RSA one would change on every boot.
 - **Firmware**: only linux-firmware's `brcm/` and `cypress/` directories
   (the Wi-Fi blobs the bootstrap verified), not all of linux-firmware: the
-  closure went from 2.7 to 1.9 GB.
+  closure went from 2.7 to 1.9 GB. Plus the Bluetooth patch files (see
+  "Bluetooth").
 - **Journal**: volatile, 32 MB, so nothing survives a crash. Debug hangs
   live (over Wi-Fi) or on the UART.
 - **Users**: immutable (`users.mutableUsers = false`); /etc/shadow is
@@ -411,6 +412,41 @@ handles that offload path, so it would likely work without the option
 (untested); we keep iwd, and the host doing the handshake costs nothing.
 Deploys can go over Wi-Fi (`deploy --hostname <wlan0 address>`), which keeps
 large copies off the stall-prone USB link.
+
+## Bluetooth (nixos/bluetooth.nix, 2026-10-13)
+
+Step 2 of the Outputs build order, configured but not yet run on the board:
+BlueZ, plus PipeWire with its Bluetooth audio support, so a speaker can be
+paired and the chain measured. Nothing in haxo-rs feeds it yet, and there is
+no Bluetooth MIDI (see #41 below for what that needs first).
+
+- **Firmware**: the controller's patch RAM files `BCM43430A1.hcd` (our
+  chip) and `BCM43430B0.hcd` (the other Zero 2 W revision), from
+  nixos-hardware's Raspberry Pi wireless firmware package (RPi-Distro's
+  bluez-firmware). linux-firmware doesn't carry them; without one the chip
+  runs its ROM firmware. Only these two files: the Wi-Fi blobs stay
+  linux-firmware's, which are the ones verified on the board.
+- **PipeWire** runs in the haxophone user's session, with linger so it
+  starts at boot, and wireplumber started with the session instead of on a
+  client's first connection. Chosen over `services.pipewire.systemWide`,
+  which upstream discourages; the cost is three wireplumber settings:
+  - `monitor.alsa` disabled: PipeWire must never open the I2S card.
+  - `monitor.alsa-midi` disabled: its sequencer ports would change which
+    port haxo-rs picks for MIDI out.
+  - `monitor.bluez.seat-monitoring` disabled: headless, there is never an
+    active seat, and wireplumber turns Bluetooth off for inactive ones.
+- Codecs in nixpkgs' PipeWire 1.6.6 include SBC, AAC, aptX (with aptX LL),
+  FastStream, LDAC and Opus. The receiver decides what is usable.
+
+Bench test, to run on the board (record the numbers here):
+1. `bluetoothctl`: `scan on`, `pair`, `trust`, `connect` the receiver.
+2. `wpctl status` shows it as a sink; `wpctl inspect` on it shows the
+   codec in use.
+3. Play: `pw-jack fluidsynth -a jack -m alsa_seq <soundfont>`, notes in
+   from `aconnect` or a MIDI file. Measure latency (key click vs. receiver
+   output) per codec, and CPU next to haxo running.
+4. Listen for radio noise on the line out with Wi-Fi and Bluetooth both
+   busy (upstream disables both radios).
 
 ## Settings file (nixos/config-file.nix, packages/haxophone-config)
 

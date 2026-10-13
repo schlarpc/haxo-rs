@@ -10,6 +10,7 @@ Raspberry Pi Zero 2 W. Design notes and decisions: [docs/haxophone.md](docs/haxo
 | `nixos/storage.nix`, `nixos/disko.nix` | SD layout: FAT /boot, btrfs `/nix` + `/persist`, tmpfs root |
 | `nixos/gadget.nix` | USB gadget: NCM network, ACM console, MIDI, MTP |
 | `nixos/wifi.nix` | iwd + networkd + Avahi |
+| `nixos/bluetooth.nix` | BlueZ + PipeWire for Bluetooth audio out (not fed yet) |
 | `nixos/config-file.nix` | Applies `config/haxophone.toml` from the card at boot |
 | `packages/` | haxo-rs (from our fork), umtprd, the settings tool, the minting app |
 

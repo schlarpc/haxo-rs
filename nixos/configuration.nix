@@ -6,7 +6,8 @@
 # console (ttyGS0), USB MIDI and MTP. The mini UART on GPIO 14/15 is a
 # second console, and Wi-Fi (wifi.nix) a way in that doesn't share the USB
 # link. Audio comes from our own device tree overlay (haxophone-hat.dts)
-# and haxo-rs as a service; no Bluetooth setup yet.
+# and haxo-rs as a service. Bluetooth and PipeWire are up for audio out
+# (bluetooth.nix), but nothing feeds them yet.
 {
   lib,
   pkgs,
@@ -27,6 +28,7 @@ in
     ./boot.nix
     ./storage.nix
     ./config-file.nix
+    ./bluetooth.nix
     ./gadget.nix
     ./wifi.nix
   ];
