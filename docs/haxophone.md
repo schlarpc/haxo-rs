@@ -412,6 +412,16 @@ firmware's SAE and 4-way-handshake offload (FWSUP) enabled it stays in
 "connecting" forever (verified). wpa_supplicant, which Raspberry Pi OS uses,
 handles that offload path, so it would likely work without the option
 (untested); we keep iwd, and the host doing the handshake costs nothing.
+Networks can also go in `wifi.txt` on the FAT boot partition
+(2026-10-13): editable from any computer with the card in a reader, so the
+board can join a new network (a venue, a phone hotspot) without a rebuild
+or the agenix key. One `WIFI_SSID=` then `WIFI_PSK=` line per network, the
+secret's format repeated; a 64-hex-digit PSK is taken as a raw key. A
+oneshot writes iwd's files from both sources at every boot, into the tmpfs
+root, so editing the file is the whole lifecycle. The secret is optional
+(`EnvironmentFile=-`), so a freshly minted card with a new host key still
+gets on Wi-Fi from wifi.txt. The PSKs are plain text on the card, which is
+no worse than before: the card holds everything else unencrypted too.
 Deploys can go over Wi-Fi (`deploy --hostname <wlan0 address>`), which keeps
 large copies off the stall-prone USB link.
 

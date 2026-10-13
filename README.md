@@ -39,8 +39,24 @@ ssh 10.68.0.1 sudo cat /etc/ssh/ssh_host_ed25519_key > key  # then shred it
 ```
 
 Without a key the app generates one and prints its public half. Put that in
-`secrets/secrets.nix` as `hostKey`, run `agenix -r`, and deploy (the first
-boot comes up without Wi-Fi).
+`secrets/secrets.nix` as `hostKey`, run `agenix -r`, and deploy. Until then
+the agenix Wi-Fi secret doesn't decrypt, but `wifi.txt` (below) works.
+
+## Wi-Fi
+
+Besides the agenix secret, the board joins every network listed in
+`wifi.txt` on the card's FAT partition, so networks can be added from any
+computer with a card reader:
+
+```
+WIFI_SSID=My Network
+WIFI_PSK=my passphrase
+```
+
+One SSID line then its PSK line per network; `#` starts a comment. The
+minting app puts a commented template there. The file is read at every boot,
+and removing a network from it forgets that network. Errors in it show in
+`journalctl -u iwd-networks`.
 
 ## Deploying
 

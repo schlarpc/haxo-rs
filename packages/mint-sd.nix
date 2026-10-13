@@ -24,6 +24,7 @@
   diskoFile,
   toplevel,
   hostName,
+  wifiTemplate,
 }:
 writeShellApplication {
   name = "mint-sd";
@@ -95,6 +96,10 @@ writeShellApplication {
     nixos-install --system ${toplevel} --root "$mnt" \
       --no-root-passwd --no-channel-copy
 
+    # The board also writes it at boot when missing; here it's there to fill
+    # in before the first boot.
+    [ -e "$mnt/boot/wifi.txt" ] || cp ${wifiTemplate} "$mnt/boot/wifi.txt"
+
     pub=$(cat "$mnt/persist/etc/ssh/ssh_host_ed25519_key.pub")
     umount -R "$mnt"
     rmdir "$mnt"
@@ -102,11 +107,13 @@ writeShellApplication {
 
     echo
     echo "Done. $dev can be removed."
+    echo "To add Wi-Fi networks, edit wifi.txt on its FAT partition."
     if [ -z "$key" ]; then
       echo
       echo "New host key; set hostKey in secrets/secrets.nix to:"
       echo "  $pub"
-      echo "then run 'agenix -r' and deploy, or the Wi-Fi secret won't decrypt."
+      echo "then run 'agenix -r' and deploy, or the Wi-Fi secret won't decrypt"
+      echo "(networks in wifi.txt work without it)."
     fi
   '';
 }

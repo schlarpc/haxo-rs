@@ -115,6 +115,7 @@
           diskoFile = ./nixos/disko.nix;
           toplevel = haxophone.config.system.build.toplevel;
           hostName = haxophone.config.networking.hostName;
+          wifiTemplate = ./nixos/wifi.txt;
         };
       });
 
