@@ -70,6 +70,9 @@ What the "Decided" items below turned into. Not yet booted on the board.
   (symlinked from the initrd, so agenix can decrypt during activation),
   /var/lib/{nixos,systemd,bluetooth,haxophone} and /home/schlarpc. Only an
   ed25519 host key is generated: an RSA one would change on every boot.
+- **Firmware**: only linux-firmware's `brcm/` and `cypress/` directories
+  (the Wi-Fi blobs the bootstrap verified), not all of linux-firmware: the
+  closure went from 2.7 to 1.9 GB.
 - **Journal**: volatile, 32 MB, so nothing survives a crash. Debug hangs
   live (over Wi-Fi) or on the UART.
 - **Users**: immutable (`users.mutableUsers = false`); /etc/shadow is

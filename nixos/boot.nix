@@ -57,8 +57,16 @@
     ];
   };
 
-  # Wi-Fi and Bluetooth firmware (brcmfmac, BCM43430/1).
-  hardware.enableRedistributableFirmware = true;
+  # Only the Broadcom/Cypress Wi-Fi firmware (brcmfmac, BCM43430/1), not all
+  # of linux-firmware, which was 782 MB of a 2.7 GB closure. Same blobs the
+  # bootstrap image verified Wi-Fi with. linux-firmware has no Bluetooth
+  # patch file (BCM43430A1.hcd) for this chip, so this drops nothing there.
+  hardware.firmware = [
+    (pkgs.runCommand "brcm-firmware" { } ''
+      mkdir -p $out/lib/firmware
+      cp -a ${pkgs.linux-firmware}/lib/firmware/{brcm,cypress} $out/lib/firmware/
+    '')
+  ];
 
   hardware.raspberry-pi = {
     firmware = {
