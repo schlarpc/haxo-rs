@@ -73,7 +73,6 @@ in
 
   networking = {
     hostName = "haxophone";
-    domain = "internal.schlarp.xyz";
     useNetworkd = true;
     useDHCP = false;
     wireless.enable = false;
