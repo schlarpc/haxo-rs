@@ -104,22 +104,19 @@
 
       checks = lib.genAttrs systems (system: (deployLib system).deployChecks self.deploy);
 
-      packages = forAllSystems (
-        pkgs:
-        {
-          haxo-rs = pkgs.callPackage ./packages/haxo-rs {
-            craneLib = inputs.crane.mkLib pkgs;
-            src = inputs.haxo-rs;
-          };
-          umtprd = pkgs.callPackage ./packages/umtprd.nix { };
-          mint-sd = pkgs.callPackage ./packages/mint-sd.nix {
-            disko = inputs.disko.packages.${pkgs.stdenv.hostPlatform.system}.disko;
-            diskoFile = ./nixos/disko.nix;
-            toplevel = haxophone.config.system.build.toplevel;
-            hostName = haxophone.config.networking.hostName;
-          };
-        }
-      );
+      packages = forAllSystems (pkgs: {
+        haxo-rs = pkgs.callPackage ./packages/haxo-rs {
+          craneLib = inputs.crane.mkLib pkgs;
+          src = inputs.haxo-rs;
+        };
+        umtprd = pkgs.callPackage ./packages/umtprd.nix { };
+        mint-sd = pkgs.callPackage ./packages/mint-sd.nix {
+          disko = inputs.disko.packages.${pkgs.stdenv.hostPlatform.system}.disko;
+          diskoFile = ./nixos/disko.nix;
+          toplevel = haxophone.config.system.build.toplevel;
+          hostName = haxophone.config.networking.hostName;
+        };
+      });
 
       apps = forAllSystems (pkgs: {
         mint-sd = {
@@ -137,6 +134,6 @@
         };
       });
 
-      formatter = forAllSystems (pkgs: pkgs.nixfmt);
+      formatter = forAllSystems (pkgs: pkgs.nixfmt-tree);
     };
 }

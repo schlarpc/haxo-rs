@@ -3,7 +3,9 @@
 let
   flake = builtins.getFlake (builtins.toString ./..);
   userKeys = builtins.filter (k: builtins.match "^ssh-(ed25519|rsa) .+" k != null) (
-    builtins.filter builtins.isString (builtins.split "\n" (builtins.readFile flake.inputs.schlarpc-keys))
+    builtins.filter builtins.isString (
+      builtins.split "\n" (builtins.readFile flake.inputs.schlarpc-keys)
+    )
   );
   # The board's identity, kept on /persist (nixos/storage.nix). The minting
   # app installs it on a new card, or prints a new one to put here.
