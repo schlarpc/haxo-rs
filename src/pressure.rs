@@ -20,6 +20,8 @@ const NOISE_DEADZONE: i32 = 10;
 pub struct Pressure {
     i2c: rppal::i2c::I2c,
     baseline: i32,
+    // The last three raw readings, oldest first.
+    recent: [i32; 3],
 }
 
 impl Pressure {
@@ -62,6 +64,7 @@ impl Pressure {
         let sensor = Pressure {
             i2c: i2c,
             baseline: baseline,
+            recent: [baseline; 3],
         };
 
         debug!("I2C: baseline set to {}", sensor.baseline);
@@ -70,7 +73,17 @@ impl Pressure {
     }
 
     pub fn read(&mut self) -> Result<i32, Box<dyn Error>> {
-        let pressure = Pressure::read_io(&mut self.i2c)?;
+        // While haxo runs, the sensor reads a spike well past the dead zone
+        // a few times a second (with haxo stopped it doesn't, amp on or not),
+        // always for a single sample: as breath, each one started a note on
+        // MIDI out. The median of the last three readings drops them, for
+        // one sample (2 ms) of lag on a breath onset.
+        self.recent = [
+            self.recent[1],
+            self.recent[2],
+            Pressure::read_io(&mut self.i2c)?,
+        ];
+        let pressure = median3(self.recent);
         // Ignore sensor noise around the baseline, on both sides, so the
         // negative-pressure gesture keeps working.
         let delta = pressure - self.baseline;
@@ -99,10 +112,26 @@ impl Pressure {
     }
 }
 
+fn median3(v: [i32; 3]) -> i32 {
+    let [a, b, c] = v;
+    a.max(b).min(a.min(b).max(c))
+}
+
 #[cfg(test)]
 mod tests {
     // Import names from outer (for mod tests) scope.
     use super::*;
+
+    #[test]
+    fn median3_drops_single_sample_spikes() {
+        assert_eq!(median3([10, 40, 10]), 10);
+        assert_eq!(median3([10, 10, 40]), 10);
+        assert_eq!(median3([40, 10, 10]), 10);
+        // A breath onset gets through one sample later.
+        assert_eq!(median3([10, 40, 60]), 40);
+        assert_eq!(median3([3, 1, 2]), 2);
+        assert_eq!(median3([-30, -40, -50]), -40);
+    }
 
     use std::thread;
     use std::time::Duration;
