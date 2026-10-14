@@ -11,6 +11,7 @@
   pkg-config,
   alsa-lib,
   fluidsynth,
+  dbus,
 }:
 let
   commonArgs = {
@@ -19,9 +20,10 @@ let
     inherit src;
     strictDeps = true;
 
-    # MIDI out to the USB gadget. `instrumentation` stays off: it toggles
-    # UART RXD, which is the serial console.
-    cargoExtraArgs = "--locked --features midi";
+    # MIDI out to the USB gadget, and Bluetooth MIDI (`ble`, which pulls in
+    # `midi`). `instrumentation` stays off: it toggles UART RXD, which is
+    # the serial console.
+    cargoExtraArgs = "--locked --features ble";
 
     # build.rs asks vergen for git metadata; the source has no .git, so
     # vergen falls back to placeholders unless these are set. `--version`
@@ -33,6 +35,7 @@ let
     buildInputs = [
       alsa-lib
       fluidsynth
+      dbus
     ];
 
     # The tests drive the real GPIO, I2C and ALSA hardware.

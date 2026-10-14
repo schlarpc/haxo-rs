@@ -41,13 +41,20 @@ in
   systemd.services.haxo = {
     description = "Haxophone";
     wantedBy = [ "multi-user.target" ];
-    # haxo-rs picks its MIDI port once, at startup: let the gadget's exist.
-    # Rebinding the gadget recreates that port, so restart with it.
+    # haxo-rs opens the gadget's MIDI device (hw:CARD=haxophone) once, at
+    # startup: let it exist. Rebinding the gadget recreates the device, so
+    # restart with it.
+    # Its Bluetooth MIDI service is registered with bluetoothd, and is gone
+    # when bluetoothd restarts: restart with it too.
     after = [
       "sound.target"
       "usb-gadget-bind.service"
+      "bluetooth.service"
     ];
-    partOf = [ "usb-gadget-bind.service" ];
+    partOf = [
+      "usb-gadget-bind.service"
+      "bluetooth.service"
+    ];
     startLimitIntervalSec = 0;
     serviceConfig = {
       Type = "idle";
@@ -59,19 +66,12 @@ in
         "--notemap-file ${haxo-rs}/share/haxo/notemap.json"
         "--prog-number 66" # GM tenor sax, zero-based
         "--sf2-file ${soundfont}"
+        "--startup-sf2-file ${soundfont}"
+        "--startup-midi-file ${haxo-rs}/share/haxo/Startup_Haxophone.mid"
+        "--ble-midi haxophone"
       ];
     };
   };
-
-  # haxo-rs hardcodes these paths (startup jingle and its soundfont, and the
-  # shutdown key combo's sudo + halt). To be patched; until then, point them
-  # into the store.
-  systemd.tmpfiles.rules = [
-    "L+ /usr/share/sounds/sf2/FluidR3_GM.sf2 - - - - ${soundfont}"
-    "L+ /usr/share/haxo/Startup_Haxophone.mid - - - - ${haxo-rs}/share/haxo/Startup_Haxophone.mid"
-    "L+ /usr/bin/sudo - - - - /run/wrappers/bin/sudo"
-    "L+ /usr/sbin/halt - - - - ${pkgs.systemd}/bin/halt"
-  ];
 
   networking = {
     hostName = "haxophone";

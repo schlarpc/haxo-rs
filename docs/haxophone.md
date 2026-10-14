@@ -34,10 +34,11 @@ Roughly in order. Details are in the sections named.
 3. **Bluetooth audio bench test** ("Bluetooth"): pair a receiver,
    measure latency per codec and CPU next to haxo, listen for radio noise.
 4. **haxo-rs patches** ("Patches to make"), each reproduced and measured
-   on the board first ("Upstream issues"). The breath CC cap comes before
-   Bluetooth MIDI.
-5. **Bluetooth MIDI**: our own BLE MIDI GATT service, since BlueZ's MIDI
-   plugin only connects out (#41 under "Upstream issues").
+   on the board first ("Upstream issues"). What's left there needs someone
+   playing (idle wake-up, BLE MIDI from a phone, the pressure spikes) or
+   step 3 below.
+5. **Bluetooth MIDI** is in haxo-rs (193ea18); try it from a phone or a
+   DAW and settle pairing.
 6. **Own render loop with the Bluetooth bridge** ("Outputs", build order
    step 3).
 7. **USB audio out** (UAC2, "TODO: USB audio out"), and the **web UI**
@@ -380,29 +381,21 @@ Ways to measure each:
 
 ## Patches to make
 
+- Own render loop with the BT bridge (see Outputs). PipeWire must never
+  open the I2S card. Sum L+R to the left channel there, and mix backing
+  tracks in it (#24, #29). Waits for the Bluetooth audio bench test
+  (build order step 2).
 - Per-channel mono/legato mode (`fluid_synth_set_basic_channel`), if
   legato phrasing is wanted: polyphony is fixed (8a9ae25), and the main
   loop's note-off before every note-on already keeps the sax monophonic.
-- Bluetooth MIDI: a BLE MIDI GATT service of our own (e.g. the `bluer`
-  crate), so phones and DAWs can connect to the instrument; after the
-  breath CC cap (see #41 above).
-- No sleeps in the main loop: `beep()` (100 ms), Control mode's program
-  change and Transpose mode still sleep inside it. They only run on mode
-  changes, but the loop stops scanning meanwhile. Needs a deferred
-  note-off.
-- Own render loop with the BT bridge (see Outputs). PipeWire must never
-  open the I2S card. Sum L+R to the left channel there, and mix backing
-  tracks in it (#24, #29).
-- MIDI out through the gadget's rawmidi device, found by card ID, instead of
-  ALSA sequencer ports.
-- Program change in Control mode steps through the presets the soundfont
-  has, instead of clamping to 0-127 (the rest of #26).
-- Idle mode for battery: after N seconds with no breath and no keys, drop the
-  tick rate and close the PCM streams; the codec driver then pulls SD_MODE
-  low and shuts the amp down. Resume on breath.
-- Make the hardcoded paths configurable (startup soundfont and MIDI under
-  /usr/share, `/usr/bin/sudo /usr/sbin/halt` for the shutdown combo); the
-  host shims them with tmpfiles symlinks for now.
+- Idle mode on in the service (`--idle-secs`), once waking up has been
+  tried on the board: see f65a60f below.
+- BLE MIDI from a phone or a DAW, and pairing: see 193ea18 below. The
+  board isn't pairable; a central that insists on pairing (bagel's
+  BlueZ+PipeWire did, for its own MIDI service) gets disconnected. Decide
+  whether to allow "just works" pairing.
+- Play through 85984f9's median filter and check that breath onsets
+  don't feel late (2 ms of lag by design).
 
 Done (commits on the fork; cc0c336 bumps `time`, which no longer
 compiled):
@@ -461,6 +454,61 @@ compiled):
   tick (max busy about equal to max interval: preempted around the key
   scan's sleeps). After: idle 2.0 ms; loaded 2.6-7.3 ms, 0-3 ticks over
   3 ms, none over 10 ms.
+- 99a2cfb: feedback beeps are timed note on/off events that the loop plays
+  as they come due (`cues.rs`), instead of `beep()` sleeping 100 ms and
+  the mode switches, program change and transpose sleeping up to 300 ms
+  inside the loop. Same timing as before. Tested on bagel against
+  GeneralUser GS with no audio driver (`HAXO_TEST_SF2=... cargo test
+  cues`); the mode switches themselves need someone at the keys.
+- 4302285: `--startup-sf2-file` and `--startup-midi-file` (empty: no
+  jingle) replace the /usr/share paths; the jingle wait polls every 10 ms
+  instead of spinning a core. `shutdown()` (sudo + halt) is never called,
+  so those paths needed nothing. The host's tmpfiles links under /usr are
+  gone.
+- 102241d: Control mode's program change moves to the nearest program the
+  soundfont has in bank 0 (fluidsynth 2's preset iteration, declared
+  `extern`: the binding only has fluidsynth 1's structs). A full GM bank
+  steps as before; GeneralUser GS lists 128 (and 13 kits in bank 128).
+- bf1ddeb: MIDI out goes to the rawmidi device `--midi-out`
+  (`hw:CARD=haxophone`), opened non-blocking, a message that doesn't fit
+  dropped whole; the sequencer port pick stays as the fallback. All Notes
+  Off at startup, seen on bagel's `midiC4D0`. While the sequencer bridge
+  holds the gadget's single rawmidi substream, `amidi` gets "busy".
+- e64084c, f65a60f: `--idle-secs N` closes the audio driver after N s
+  without key changes or breath (pressure on two ticks in a row: the
+  sensor spikes for single ticks at rest), and slows the tick to 20 ms;
+  the next key change or breath reopens it. Measured 2026-10-14 with
+  `RUST_LOG=idle=debug` at rest: 0 key changes, 13-17 single-tick
+  pressure spikes per 10 s, which kept the first version awake. While
+  awake haxo uses about 20% of a core and SD_MODE (GPIO4) is high.
+  With 85984f9's median filter and `--idle-secs 15` at rest (2026-10-14):
+  idle after 15 s, SD_MODE low (amp off), haxo from about 20% of a core
+  to 1%. Waking (a key change or breath, then the audio driver reopening)
+  needs someone at the instrument, so the service doesn't pass
+  `--idle-secs` yet; the log says how long the reopen took.
+- 193ea18: Bluetooth LE MIDI (`ble` feature, `--ble-midi NAME`): the BLE
+  MIDI service and characteristic through BlueZ (bluer), advertised as
+  NAME. Messages reach a single-threaded tokio thread through a bounded
+  queue without blocking the loop; it sends one packet at most every
+  10 ms, collapsing breath values in a row to the latest, so the stack's
+  queue can't build up (#41). A new subscriber gets All Notes Off.
+  Tested 2026-10-14 from bagel: BlueZ there connected (MTU 512) and its
+  MIDI plugin made an ALSA sequencer port, "haxophone Bluetooth", that
+  `aseqdump` read haxo's messages from; haxo logged the subscribe and,
+  on disconnect, the broken pipe. The first tries dropped the link: the
+  board's own BlueZ MIDI plugin, as a client, found the BLE MIDI service
+  of bagel's PipeWire, read it, got "Insufficient Encryption" and asked
+  to pair, which the board refuses (btmon). Both MIDI pieces on the board
+  are off now (bluetooth.nix), and haxo restarts with bluetoothd, which
+  drops its registration. Not tried from a phone yet.
+- 85984f9: the pressure reading is the median of the last three samples.
+  Found through BLE: at rest, haxo sent the open-key note (59) at velocity
+  127 with breath blips, 64 note-ons a minute over USB MIDI. Sampling
+  the sensor at 500 Hz from a second reader: 14 spikes in 20 s while haxo
+  runs, every one a single sample, and none with haxo stopped, amp on or
+  off. Reading the sensor before the key scan didn't help (A/B, 55 s at
+  rest each: 21 and 22 note-ons in 40 s); the median: 0, and no pressure
+  ticks at all. One sample (2 ms) of lag on a breath onset.
 
 ## USB gadget (nixos/gadget.nix)
 
@@ -471,10 +519,9 @@ MIDI 1.0 device) and MTP (umtprd over FunctionFS, storage "Files" at
 writing its descriptors; `usb-gadget-bind` then binds the UDC and is PartOf
 umtprd, so restarting umtprd rebinds (tested: under a second, host
 re-enumerates). If the bind fails, `usb-gadget-fallback` tears the gadget
-down and loads `g_cdc`, keeping network and serial. haxo picks the
-gadget's MIDI port (the last sequencer port; `snd_seq_dummy`'s Midi Through
-is the fallback) and is PartOf the bind unit, since a rebind recreates
-that port. FunctionFS is mounted `no_disconnect=1`: while umtprd is down
+down and loads `g_cdc`, keeping network and serial. haxo opens the
+gadget's rawmidi device (`hw:CARD=haxophone`) at startup and is PartOf the
+bind unit, since a rebind recreates that device. FunctionFS is mounted `no_disconnect=1`: while umtprd is down
 only MTP stalls, but when it reopens ep0 the kernel unbinds the whole
 gadget anyway (`ffs_closed` -> `unregister_gadget_item`), so a successful
 umtprd restart costs one re-enumeration. The gadget units are
@@ -497,8 +544,10 @@ large copies off the stall-prone USB link.
 
 Step 2 of the Outputs build order, configured but not yet run on the board:
 BlueZ, plus PipeWire with its Bluetooth audio support, so a speaker can be
-paired and the chain measured. Nothing in haxo-rs feeds it yet, and there is
-no Bluetooth MIDI (see #41 below for what that needs first).
+paired and the chain measured. Nothing in haxo-rs feeds it audio yet.
+haxo-rs serves Bluetooth MIDI itself (`--ble-midi haxophone`, 193ea18), so
+BlueZ's MIDI plugin is disabled, and so is PipeWire's BLE MIDI server
+(`monitor.bluez-midi`); see "Patches to make" for why.
 
 - **Firmware**: the controller's patch RAM files `BCM43430A1.hcd` (our
   chip) and `BCM43430B0.hcd` (the other Zero 2 W revision), from
@@ -509,10 +558,12 @@ no Bluetooth MIDI (see #41 below for what that needs first).
 - **PipeWire** runs in the haxophone user's session, with linger so it
   starts at boot, and wireplumber started with the session instead of on a
   client's first connection. Chosen over `services.pipewire.systemWide`,
-  which upstream discourages; the cost is three wireplumber settings:
+  which upstream discourages; the cost is four wireplumber settings:
   - `monitor.alsa` disabled: PipeWire must never open the I2S card.
   - `monitor.alsa-midi` disabled: its sequencer ports would change which
-    port haxo-rs picks for MIDI out.
+    port haxo-rs picks for MIDI out when it falls back to the sequencer.
+  - `monitor.bluez-midi` disabled: a second BLE MIDI service next to
+    haxo-rs's.
   - `monitor.bluez.seat-monitoring` disabled: headless, there is never an
     active seat, and wireplumber turns Bluetooth off for inactive ones.
 - Codecs in nixpkgs' PipeWire 1.6.6 include SBC, AAC, aptX (with aptX LL),

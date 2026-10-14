@@ -31,6 +31,11 @@ in
   hardware.bluetooth = {
     enable = true;
     powerOnBoot = true;
+    # haxo-rs serves Bluetooth MIDI itself (--ble-midi). BlueZ's MIDI plugin
+    # is a client: it connects to BLE MIDI services on the other side, and
+    # a peer's (bagel's PipeWire) that wants encryption made it start
+    # pairing, which the board refuses, so the link dropped.
+    disabledPlugins = [ "midi" ];
   };
 
   security.rtkit.enable = true;
@@ -47,6 +52,9 @@ in
         # The ALSA sequencer bridge adds seq ports, which changes which
         # port haxo-rs picks for MIDI out (it takes the last one).
         "monitor.alsa-midi" = "disabled";
+        # PipeWire's BLE MIDI server would publish a second MIDI service
+        # next to haxo-rs's.
+        "monitor.bluez-midi" = "disabled";
         # Headless: there is never an active seat, and with seat
         # monitoring wireplumber turns Bluetooth off for inactive ones.
         "monitor.bluez.seat-monitoring" = "disabled";
