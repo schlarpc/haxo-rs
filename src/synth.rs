@@ -11,6 +11,45 @@ extern "C" {
     fn malloc_trim(pad: usize) -> i32;
 }
 
+// fluidsynth 2's soundfont API; the binding only has fluidsynth 1's.
+#[allow(non_camel_case_types)]
+type fluid_ptr = *mut std::ffi::c_void;
+extern "C" {
+    fn fluid_synth_sfcount(synth: fluid_ptr) -> i32;
+    fn fluid_synth_get_sfont(synth: fluid_ptr, num: u32) -> fluid_ptr;
+    fn fluid_sfont_iteration_start(sfont: fluid_ptr);
+    fn fluid_sfont_iteration_next(sfont: fluid_ptr) -> fluid_ptr;
+    fn fluid_preset_get_banknum(preset: fluid_ptr) -> i32;
+    fn fluid_preset_get_num(preset: fluid_ptr) -> i32;
+}
+
+// The program numbers in `bank` across the loaded soundfonts, sorted.
+pub fn programs(syn: &synth::Synth, bank: i32) -> Vec<i32> {
+    let raw = syn.to_raw() as fluid_ptr;
+    let mut programs = Vec::new();
+    unsafe {
+        for num in 0..fluid_synth_sfcount(raw) {
+            let sfont = fluid_synth_get_sfont(raw, num as u32);
+            if sfont.is_null() {
+                continue;
+            }
+            fluid_sfont_iteration_start(sfont);
+            loop {
+                let preset = fluid_sfont_iteration_next(sfont);
+                if preset.is_null() {
+                    break;
+                }
+                if fluid_preset_get_banknum(preset) == bank {
+                    programs.push(fluid_preset_get_num(preset));
+                }
+            }
+        }
+    }
+    programs.sort();
+    programs.dedup();
+    programs
+}
+
 const AUDIO_DEVICE_POLL_MS: u64 = 250;
 const AUDIO_DEVICE_TIMEOUT_MS: u64 = 30_000;
 
@@ -121,4 +160,32 @@ fn play_jingle(syn: &mut synth::Synth, sf2file: &str, midifile: &str) -> Option<
         thread::sleep(Duration::from_millis(10));
     }
     id
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Needs a soundfont in HAXO_TEST_SF2; passes vacuously without one.
+    #[test]
+    fn lists_the_programs_of_a_bank() {
+        let Ok(sf2) = std::env::var("HAXO_TEST_SF2") else {
+            return;
+        };
+        let mut settings = settings::Settings::new();
+        let syn = synth::Synth::new(&mut settings);
+        // Deleting the synth after its settings hangs.
+        std::mem::forget(settings);
+        assert!(programs(&syn, 0).is_empty());
+        syn.sfload(&sf2, 1).expect("soundfont loads");
+        let progs = programs(&syn, 0);
+        println!(
+            "bank 0: {} programs, bank 128: {}",
+            progs.len(),
+            programs(&syn, 128).len()
+        );
+        assert!(!progs.is_empty());
+        assert!(progs.windows(2).all(|w| w[0] < w[1]));
+        assert!(progs.iter().all(|p| (0..128).contains(p)));
+    }
 }
