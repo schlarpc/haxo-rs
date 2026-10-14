@@ -6,13 +6,14 @@ use rppal::gpio::Gpio;
 use std::cmp::max;
 use std::error::Error;
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use structopt::StructOpt;
 
 mod alsa;
 mod commands;
 mod cues;
+mod idle;
 mod keyscan;
 #[cfg(feature = "midi")]
 mod midi;
@@ -44,6 +45,10 @@ struct Opt {
     #[cfg(feature = "midi")]
     #[structopt(long, default_value = "hw:CARD=haxophone")]
     midi_out: String,
+    /// Seconds without breath or key changes before the audio output is
+    /// closed (shutting the amp down) until the next one; 0 never closes it
+    #[structopt(long, default_value = "0")]
+    idle_secs: u64,
     /// Startup jingle (a MIDI file); empty to start without one
     #[structopt(long, default_value = "/usr/share/haxo/Startup_Haxophone.mid")]
     startup_midi_file: String,
@@ -66,6 +71,8 @@ fn shutdown() {
 }
 
 const TICK_USECS: u32 = 2_000;
+// The tick while idle: enough to notice breath or keys.
+const IDLE_TICK_USECS: u64 = 20_000;
 
 #[cfg(feature = "instrumentation")]
 const GPIO_UART_RXD: u8 = 15;
@@ -78,7 +85,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let opt = Opt::from_args();
     debug!("{:?}", opt);
 
-    let (synth, _settings, _adriver) = synth::try_init(
+    let (synth, settings, mut audio) = synth::try_init(
         &opt.sf2_file,
         opt.prog_number,
         &opt.startup_sf2_file,
@@ -125,6 +132,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let tick_period = Duration::from_micros(TICK_USECS as u64);
     let mut tick = ticks::Ticker::new(tick_period);
     let mut tick_stats = ticks::TickStats::new(tick_period);
+    let idle_after = Some(Duration::from_secs(opt.idle_secs)).filter(|d| !d.is_zero());
+    let mut idle = idle::Idle::new(idle_after, Instant::now());
     loop {
         tick_stats.idle();
         tick.wait();
@@ -136,6 +145,27 @@ fn main() -> Result<(), Box<dyn Error>> {
         let keys = keyscan::scan()?;
         let pressure = sensor.read()?;
         let vol = max(0, pressure);
+
+        match idle.update(Instant::now(), keys, pressure) {
+            idle::Change::Sleep => {
+                audio.close();
+                tick.set_period(Duration::from_micros(IDLE_TICK_USECS));
+                tick_stats.set_period(Duration::from_micros(IDLE_TICK_USECS));
+                info!("Idle: audio closed");
+            }
+            idle::Change::Wake => {
+                let started = Instant::now();
+                audio.open(&settings, &synth);
+                tick.set_period(tick_period);
+                tick_stats.set_period(tick_period);
+                info!(
+                    "Awake: audio reopened in {} ms",
+                    started.elapsed().as_millis()
+                );
+            }
+            idle::Change::None => (),
+        }
+
         const MIDI_CC_VOLUME: i32 = 7;
         if last_vol != vol {
             synth.cc(0, MIDI_CC_VOLUME, vol);

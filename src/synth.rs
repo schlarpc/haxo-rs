@@ -1,6 +1,6 @@
 extern crate fluidsynth;
 
-use fluidsynth::{audio, midi, settings, synth};
+use fluidsynth::{midi, settings, synth};
 use log::{info, warn};
 use std::thread;
 use std::time::Duration;
@@ -9,6 +9,56 @@ use crate::alsa;
 
 extern "C" {
     fn malloc_trim(pad: usize) -> i32;
+}
+
+// The audio driver: fluidsynth's thread that renders the synth into the
+// ALSA device. Closing it closes the PCM stream, and the MAX98357A's codec
+// driver then pulls SD_MODE low, shutting the amp down. The binding's
+// AudioDriver needs the synth mutably, which the main loop can't offer.
+pub struct Audio {
+    driver: *mut std::ffi::c_void,
+}
+
+extern "C" {
+    fn new_fluid_audio_driver(settings: fluid_ptr, synth: fluid_ptr) -> fluid_ptr;
+    fn delete_fluid_audio_driver(driver: fluid_ptr);
+}
+
+impl Audio {
+    pub fn new() -> Self {
+        Audio {
+            driver: std::ptr::null_mut(),
+        }
+    }
+
+    pub fn is_open(&self) -> bool {
+        !self.driver.is_null()
+    }
+
+    pub fn open(&mut self, settings: &settings::Settings, syn: &synth::Synth) -> bool {
+        if !self.is_open() {
+            self.driver = unsafe {
+                new_fluid_audio_driver(settings.to_raw() as fluid_ptr, syn.to_raw() as fluid_ptr)
+            };
+            if !self.is_open() {
+                warn!("Failed to open the audio driver");
+            }
+        }
+        self.is_open()
+    }
+
+    pub fn close(&mut self) {
+        if self.is_open() {
+            unsafe { delete_fluid_audio_driver(self.driver) };
+            self.driver = std::ptr::null_mut();
+        }
+    }
+}
+
+impl Drop for Audio {
+    fn drop(&mut self) {
+        self.close();
+    }
 }
 
 // fluidsynth 2's soundfont API; the binding only has fluidsynth 1's.
@@ -58,7 +108,7 @@ pub fn try_init(
     banknum: i32,
     startup_sf2_file: &str,
     startup_midi_file: &str,
-) -> (synth::Synth, settings::Settings, audio::AudioDriver) {
+) -> (synth::Synth, settings::Settings, Audio) {
     let mut settings = settings::Settings::new();
     // try to optimize for low latency
     if settings.setstr("audio.driver", "alsa") {
@@ -101,7 +151,8 @@ pub fn try_init(
         warn!("Failed to set gain to {}", FSYNTH_GAIN);
     }
 
-    let adriver = audio::AudioDriver::new(&mut settings, &mut syn);
+    let mut adriver = Audio::new();
+    adriver.open(&settings, &syn);
 
     // Polyphony 16 for the jingle and for the sax alike. The main loop ends
     // each note before the next, and a preset can need several voices per

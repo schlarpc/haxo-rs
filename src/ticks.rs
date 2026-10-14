@@ -29,6 +29,12 @@ impl TickStats {
         }
     }
 
+    // Change the period the intervals are measured against.
+    pub fn set_period(&mut self, period: Duration) {
+        self.period = period;
+        self.last_wake = None;
+    }
+
     // Call when a tick wakes the loop.
     pub fn wake(&mut self) {
         let now = Instant::now();
@@ -84,6 +90,12 @@ impl Ticker {
             period,
             next: Instant::now() + period,
         }
+    }
+
+    // Change the period from the next tick on.
+    pub fn set_period(&mut self, period: Duration) {
+        self.next = Instant::now() + period;
+        self.period = period;
     }
 
     // Sleep until the next tick. Ticks missed while the loop ran late are
