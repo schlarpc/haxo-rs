@@ -167,6 +167,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         synth.cc(0, MIDI_CC_VOLUME, vol);
                     }
                     synth.noteon(0, note, 127);
+                    debug!("active voices: {}", synth.get_active_voice_count());
                     #[cfg(feature = "midi")]
                     midi_out.noteon(note, 127);
                     #[cfg(feature = "instrumentation")]

@@ -84,10 +84,11 @@ pub fn try_init(
         // wait ..
     }
 
-    // Switch off polyphony for sax
-    if !syn.set_polyphony(1) {
-        warn!("Failed to set polyphony to 1");
-    }
+    // Polyphony stays at 16 for the sax as well. The main loop already ends
+    // each note before the next, and a preset can need several voices per
+    // note (layers, stereo sample pairs): with polyphony 1 fluidsynth kept
+    // one of them, sometimes a silent one, and logged "Failed to allocate a
+    // synthesis process" for the rest.
 
     let sf2 = syn.sfload(sf2file, 1);
 
