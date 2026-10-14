@@ -453,7 +453,9 @@ compiled):
   ticks per 10 s over 3 ms, 75-179 over 10 ms, the delay mostly within a
   tick (max busy about equal to max interval: preempted around the key
   scan's sleeps). After: idle 2.0 ms; loaded 2.6-7.3 ms, 0-3 ticks over
-  3 ms, none over 10 ms.
+  3 ms, none over 10 ms. `mlockall` makes every mapped page resident,
+  libraries included: with BLE MIDI as well (85984f9), haxo's RSS is
+  85 MB, against 57 MB after 6bf810a.
 - 99a2cfb: feedback beeps are timed note on/off events that the loop plays
   as they come due (`cues.rs`), instead of `beep()` sleeping 100 ms and
   the mode switches, program change and transpose sleeping up to 300 ms
