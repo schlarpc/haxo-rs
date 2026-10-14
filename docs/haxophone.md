@@ -382,7 +382,6 @@ Ways to measure each:
 
 - Polyphony 8-16 with per-channel mono/legato mode instead of
   `set_polyphony(1)` (see #29 above).
-- Rate-limit breath CC#2 on MIDI out (see #41 above).
 - Bluetooth MIDI: a BLE MIDI GATT service of our own (e.g. the `bluer`
   crate), so phones and DAWs can connect to the instrument; after the
   breath CC cap (see #41 above).
@@ -400,11 +399,6 @@ Ways to measure each:
 - Make the hardcoded paths configurable (startup soundfont and MIDI under
   /usr/share, `/usr/bin/sudo /usr/sbin/halt` for the shutdown combo); the
   host shims them with tmpfiles symlinks for now.
-- MIDI out must not be fatal when no sequencer port exists.
-- `Pressure::init` evaluates `i2c.clock_speed()?` inside a `debug!`, so
-  `RUST_LOG=debug` makes it fail: rppal reads that from a sysfs file the
-  mainline I2C driver doesn't have. `log` evaluates the arguments before any
-  per-module filter, so debug logging is unusable until this is fixed.
 
 Done (commits on the fork; cc0c336 bumps `time`, which no longer
 compiled):
@@ -423,6 +417,21 @@ compiled):
   from about 62% to about 25% of one core at rest.
 - 9e06de6: poll up to 30 s for the sound card at startup instead of panicking
   while the I2S card probes.
+- edba249: `RUST_LOG=debug` made `Pressure::init` fail (reproduced: panic,
+  `NotFound`): it evaluated `i2c.clock_speed()?` inside a `debug!`, and
+  rppal reads that from a sysfs file the mainline I2C driver doesn't have.
+  The clock speed is now logged only when it can be read.
+- a1d21ea: breath CC#2 at most every 10 ms, always the latest value, and a
+  held-back value flushed before each note on/off (#41). Measured
+  2026-10-14 on bagel, reading the gadget's rawmidi device (`midiC4D0`)
+  with host timestamps, about 40 s of playing each: before, 196 msgs/s
+  while breathing, median gap 2.2 ms, peaks of 42 per 100 ms; after,
+  79 msgs/s, median gap 11.8 ms, 13 of 1240 gaps under 10 ms that aren't
+  next to a note (USB batching). The playing differed between runs (14 vs
+  187 note events). BLE latency itself waits for Bluetooth MIDI. The same
+  commit makes MIDI out optional: with no port, haxo warns and keeps
+  playing (not reproduced on the board: `snd_seq_dummy` always provides
+  a port).
 
 ## USB gadget (nixos/gadget.nix)
 
