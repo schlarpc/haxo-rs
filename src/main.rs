@@ -6,13 +6,13 @@ use rppal::gpio::Gpio;
 use std::cmp::max;
 use std::error::Error;
 use std::process::Command;
-use std::thread;
 use std::time::Duration;
 
 use structopt::StructOpt;
 
 mod alsa;
 mod commands;
+mod cues;
 mod keyscan;
 #[cfg(feature = "midi")]
 mod midi;
@@ -22,8 +22,6 @@ mod pressure;
 mod synth;
 mod ticks;
 mod transpose;
-
-use crate::synth::beep;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "haxo", about = "Make music on a haxophone", version = env!("VERGEN_GIT_DESCRIBE"), settings = &[structopt::clap::AppSettings::AllowNegativeNumbers])]
@@ -95,11 +93,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut last_note = 0;
     let mut mode = Mode::Play;
-    let mut cmd = commands::Command::new(&synth, opt.prog_number);
+    let cues = cues::Cues::new(&synth);
+    let mut cmd = commands::Command::new(&synth, &cues, opt.prog_number);
 
     const TRANSPOSE_COUNTDOWN_MS: u32 = 200u32;
     const TRANSPOSE_COUNTDOWN_TICKS: u32 = TRANSPOSE_COUNTDOWN_MS * 1000 / TICK_USECS;
-    let mut transpose = transpose::Transpose::new(&synth, TRANSPOSE_COUNTDOWN_TICKS);
+    let mut transpose = transpose::Transpose::new(&cues, TRANSPOSE_COUNTDOWN_TICKS);
 
     const NEG_PRESS_COUNTDOWN_MS: u32 = 500u32;
     const NEG_PRESS_INIT_VAL: u32 = NEG_PRESS_COUNTDOWN_MS * 1000 / TICK_USECS;
@@ -114,6 +113,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         tick_stats.idle();
         tick.wait();
         tick_stats.wake();
+        cues.poll();
         #[cfg(feature = "instrumentation")]
         busy_pin.set_high();
 
@@ -143,7 +143,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if mode != Mode::Play {
             // All three left hand palm keys pressed at once
             if keys == 0x124 {
-                beep(&synth, 70, 50);
+                cues.beep(70, 50, Duration::ZERO);
                 mode = Mode::Play;
                 info!("Return to Play Mode");
             }
@@ -202,14 +202,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                 match notemap.get_name(&note) {
                     Some("Low Bb") => {
                         mode = Mode::Control;
-                        beep(&synth, 71, 50);
+                        cues.beep(71, 50, Duration::ZERO);
                         info!("Enter Control Mode");
                     }
                     Some("Low B") => {
                         mode = Mode::Transpose;
-                        beep(&synth, 71, 50);
-                        thread::sleep(Duration::from_millis(20));
-                        beep(&synth, 75, 50);
+                        cues.beep(71, 50, Duration::ZERO);
+                        cues.beep(75, 50, Duration::from_millis(120));
                         info!("Enter Transpose Mode");
                     }
                     _ => {}

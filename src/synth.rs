@@ -119,11 +119,3 @@ pub fn try_init(
     println!("Synth created");
     (syn, settings, adriver)
 }
-
-pub fn beep(synth: &synth::Synth, note: i32, vol: i32) {
-    const MIDI_CC_VOLUME: i32 = 7;
-    synth.noteon(0, note, vol);
-    synth.cc(0, MIDI_CC_VOLUME, vol);
-    thread::sleep(Duration::from_millis(100));
-    synth.noteoff(0, note);
-}

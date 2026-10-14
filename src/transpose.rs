@@ -1,11 +1,9 @@
-use std::thread;
 use std::time::Duration;
 
-use fluidsynth::synth::Synth;
 use log::info;
 
+use crate::cues::Cues;
 use crate::notemap::NoteMap;
-use crate::synth::beep;
 
 #[derive(Copy, Clone, PartialEq)]
 enum TransposeCmd {
@@ -40,7 +38,7 @@ fn get_cmd(key: u32, vol: i32, notemap: &NoteMap) -> TransposeCmd {
 }
 
 pub(crate) struct Transpose<'a> {
-    synth: &'a Synth,
+    cues: &'a Cues<'a>,
     // Minimum time keys must be held to compute transpose.
     countdown_init: u32,
 
@@ -53,9 +51,9 @@ pub(crate) struct Transpose<'a> {
 }
 
 impl<'a> Transpose<'a> {
-    pub(crate) fn new(synth: &'a Synth, countdown_init: u32) -> Self {
+    pub(crate) fn new(cues: &'a Cues<'a>, countdown_init: u32) -> Self {
         Transpose {
-            synth,
+            cues,
             countdown_init,
             cmd: TransposeCmd::None,
             countdown: 0,
@@ -93,9 +91,12 @@ impl<'a> Transpose<'a> {
         notemap.transpose = transpose;
         info!("Set transpose to {transpose}");
         // Beep reference note then transposed note.
-        beep(&self.synth, TRANSPOSE_REFERENCE, 50);
-        thread::sleep(Duration::from_millis(100));
-        beep(&self.synth, TRANSPOSE_REFERENCE + transpose, 50);
+        self.cues.beep(TRANSPOSE_REFERENCE, 50, Duration::ZERO);
+        self.cues.beep(
+            TRANSPOSE_REFERENCE + transpose,
+            50,
+            Duration::from_millis(200),
+        );
     }
 
     // Offset the tranpose amount by a number of half-steps.

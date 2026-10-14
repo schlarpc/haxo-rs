@@ -1,9 +1,10 @@
 use std::cmp::{max, min};
-use std::thread;
 use std::time::Duration;
 
 use fluidsynth::synth::Synth;
 use log::info;
+
+use crate::cues::Cues;
 
 #[derive(Copy, Clone, PartialEq)]
 enum CommandKeys {
@@ -13,8 +14,6 @@ enum CommandKeys {
     ChangeProgFastDown,
     Unmapped,
 }
-
-const MIDI_CC_VOLUME: i32 = 7;
 
 fn key2cmdkey(key: u32) -> CommandKeys {
     match key {
@@ -29,14 +28,16 @@ fn key2cmdkey(key: u32) -> CommandKeys {
 
 pub(crate) struct Command<'a> {
     synth: &'a Synth,
+    cues: &'a Cues<'a>,
     prog_number: i32,
     last_cmd_key: CommandKeys,
 }
 
 impl<'a> Command<'a> {
-    pub(crate) fn new(synth: &'a Synth, prog_number: i32) -> Self {
+    pub(crate) fn new(synth: &'a Synth, cues: &'a Cues<'a>, prog_number: i32) -> Self {
         Command {
             synth: synth,
+            cues: cues,
             prog_number: prog_number,
             last_cmd_key: CommandKeys::Unmapped,
         }
@@ -61,9 +62,6 @@ impl<'a> Command<'a> {
         self.prog_number = max(0, min(127, self.prog_number + change));
         self.synth.program_change(0, self.prog_number);
         info!("New MIDI program number {}", self.prog_number);
-        self.synth.noteon(0, 53, 60);
-        self.synth.cc(0, MIDI_CC_VOLUME, 60);
-        thread::sleep(Duration::from_millis(100));
-        self.synth.noteoff(0, 53);
+        self.cues.beep(53, 60, Duration::ZERO);
     }
 }
