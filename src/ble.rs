@@ -10,6 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use bluer::adv::Advertisement;
+use bluer::agent::Agent;
 use bluer::gatt::local::{
     characteristic_control, Application, Characteristic, CharacteristicControlEvent,
     CharacteristicNotify, CharacteristicNotifyMethod, CharacteristicRead, CharacteristicWrite,
@@ -76,6 +77,30 @@ async fn serve(name: String, mut rx: mpsc::Receiver<Message>) -> bluer::Result<(
     let session = bluer::Session::new().await?;
     let adapter = session.default_adapter().await?;
     adapter.set_powered(true).await?;
+
+    // Pairing for whoever asks, with nothing to type: some centrals pair
+    // before they use a MIDI service, and without an agent the board
+    // refuses and they drop the link. Unset handlers reject, and any
+    // accepting one makes bluer register as DisplayYesNo, so a phone shows
+    // a code and a Pair button and the board confirms by itself. Bonds are
+    // kept in /var/lib/bluetooth, across reboots.
+    let _agent = session
+        .register_agent(Agent {
+            request_default: true,
+            request_confirmation: Some(Box::new(|req| {
+                info!("Bluetooth: pairing with {}", req.device);
+                async { Ok(()) }.boxed()
+            })),
+            request_authorization: Some(Box::new(|req| {
+                info!("Bluetooth: pairing with {}", req.device);
+                async { Ok(()) }.boxed()
+            })),
+            authorize_service: Some(Box::new(|_| async { Ok(()) }.boxed())),
+            ..Default::default()
+        })
+        .await?;
+    adapter.set_pairable_timeout(0).await?;
+    adapter.set_pairable(true).await?;
 
     let (char_control, char_handle) = characteristic_control();
     let app = Application {
