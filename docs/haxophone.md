@@ -386,8 +386,10 @@ Ways to measure each:
 - Bluetooth MIDI: a BLE MIDI GATT service of our own (e.g. the `bluer`
   crate), so phones and DAWs can connect to the instrument; after the
   breath CC cap (see #41 above).
-- Main loop at realtime priority below the audio thread, `mlockall`, and no
-  sleeps in the loop.
+- No sleeps in the main loop: `beep()` (100 ms), Control mode's program
+  change and Transpose mode still sleep inside it. They only run on mode
+  changes, but the loop stops scanning meanwhile. Needs a deferred
+  note-off.
 - Own render loop with the BT bridge (see Outputs). PipeWire must never
   open the I2S card. Sum L+R to the left channel there, and mix backing
   tracks in it (#24, #29).
@@ -440,11 +442,25 @@ compiled):
   none per 26 note-ons. Every note started at least 2 voices (a stereo
   pair; fluidsynth had kept only one), at most 10 with release tails
   overlapping. By ear: "much richer".
-- 6bf810a: FluidR3 is unloaded after the jingle, once the user's soundfont
-  is loaded, then `malloc_trim(0)` (#26). haxo's RSS went from 103 MB to
+- 6bf810a: the startup soundfont is unloaded after the jingle, once the user's soundfont
+  is loaded, then `malloc_trim(0)` (#26). On this host the startup path is
+  a tmpfiles link to the same GeneralUser GS file, so this dropped a second
+  copy of it, not FluidR3. haxo's RSS went from 103 MB to
   57 MB. Unloading before the load reached 60 MB but left every channel
   without a preset for a moment (16 "No preset found" warnings); unloading
   after it without the trim stayed at 73 MB, freed pages stuck in the heap.
+- 1759daf: tick timing in the log (`RUST_LOG=info,ticks=debug`): every
+  5000 ticks, the longest interval, how many ran over 1.5/2.5/5 periods,
+  and the longest tick's work.
+- a46fac9: the main loop sleeps to its own deadlines (schedule_recv's
+  timer thread is gone) at SCHED_FIFO 80, below fluidsynth's 99, with
+  `mlockall`. Measured 2026-10-14 with 1759daf's log: 20 s idle, then 30 s
+  of a Wi-Fi ssh upload, three busy loops and fsync'd 20 MB writes to the
+  card. Before: idle max interval 2.4-6.1 ms; loaded 91-111 ms, 469-942
+  ticks per 10 s over 3 ms, 75-179 over 10 ms, the delay mostly within a
+  tick (max busy about equal to max interval: preempted around the key
+  scan's sleeps). After: idle 2.0 ms; loaded 2.6-7.3 ms, 0-3 ticks over
+  3 ms, none over 10 ms.
 
 ## USB gadget (nixos/gadget.nix)
 
