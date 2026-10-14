@@ -39,6 +39,11 @@ struct Opt {
     /// Soundfont for the startup jingle; unloaded once it has played
     #[structopt(long, default_value = "/usr/share/sounds/sf2/FluidR3_GM.sf2")]
     startup_sf2_file: String,
+    /// ALSA rawmidi device for MIDI out; when it can't be opened, the last
+    /// sequencer port
+    #[cfg(feature = "midi")]
+    #[structopt(long, default_value = "hw:CARD=haxophone")]
+    midi_out: String,
     /// Startup jingle (a MIDI file); empty to start without one
     #[structopt(long, default_value = "/usr/share/haxo/Startup_Haxophone.mid")]
     startup_midi_file: String,
@@ -80,7 +85,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &opt.startup_midi_file,
     );
     #[cfg(feature = "midi")]
-    let mut midi_out = midi::MidiOut::new();
+    let mut midi_out = midi::MidiOut::new(&opt.midi_out);
 
     // Use UART RXD pin to monitor timing of periodic task.  This is easily
     // accessible on the haxophone HAT when the console is disabled.

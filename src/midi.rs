@@ -1,6 +1,9 @@
+use ::alsa::rawmidi::Rawmidi;
+use ::alsa::Direction;
 use midir::{MidiOutput, MidiOutputConnection, MidiOutputPort};
 
 use std::error::Error;
+use std::io::Write;
 use std::time::{Duration, Instant};
 
 use log::{info, warn};
@@ -11,31 +14,58 @@ use log::{info, warn};
 // with the latest value.
 const BREATH_INTERVAL: Duration = Duration::from_millis(10);
 
+enum Conn {
+    // A rawmidi device, opened non-blocking: when the receiver stops
+    // reading, messages are dropped instead of stalling the main loop.
+    Raw(Rawmidi),
+    // An ALSA sequencer port, when there is no such device.
+    Seq(MidiOutputConnection),
+}
+
 pub struct MidiOut {
-    // None when there was no port to connect to: the synth still plays.
-    conn_out: Option<MidiOutputConnection>,
+    // None when there was nothing to connect to: the synth still plays.
+    conn_out: Option<Conn>,
+    // Messages dropped because the rawmidi buffer was full.
+    dropped: u64,
     // Breath CC value not yet sent, and when one was last sent.
     breath_pending: Option<u8>,
     breath_sent_at: Option<Instant>,
 }
 
 impl MidiOut {
-    pub fn new() -> Self {
-        let conn_out = match MidiOut::connect() {
-            Ok(conn) => Some(conn),
+    // Send to the rawmidi `device` (e.g. "hw:CARD=haxophone", the USB
+    // gadget's MIDI function), or when it can't be opened, to a sequencer
+    // port as upstream does.
+    pub fn new(device: &str) -> Self {
+        let conn_out = match Rawmidi::new(device, Direction::Playback, true) {
+            Ok(raw) => {
+                info!("MIDI out to {}", device);
+                Some(Conn::Raw(raw))
+            }
             Err(e) => {
-                warn!("MIDI out disabled: {}", e);
-                None
+                info!("No MIDI device {} ({}), trying sequencer ports", device, e);
+                match MidiOut::connect_seq() {
+                    Ok(conn) => Some(Conn::Seq(conn)),
+                    Err(e) => {
+                        warn!("MIDI out disabled: {}", e);
+                        None
+                    }
+                }
             }
         };
-        MidiOut {
+        let mut midi = MidiOut {
             conn_out,
+            dropped: 0,
             breath_pending: None,
             breath_sent_at: None,
-        }
+        };
+        // Release anything a previous run left sounding on the receiver.
+        const ALL_NOTES_OFF: u8 = 123;
+        midi.send(&[0xB0, ALL_NOTES_OFF, 0]);
+        midi
     }
 
-    fn connect() -> Result<MidiOutputConnection, Box<dyn Error>> {
+    fn connect_seq() -> Result<MidiOutputConnection, Box<dyn Error>> {
         let midi_out = MidiOutput::new("Midi Output")?;
 
         let out_ports = midi_out.ports();
@@ -64,8 +94,22 @@ impl MidiOut {
     }
 
     fn send(&mut self, msg: &[u8]) {
-        if let Some(conn) = self.conn_out.as_mut() {
-            let _ = conn.send(msg);
+        match self.conn_out.as_mut() {
+            Some(Conn::Raw(raw)) => {
+                // Whole messages only: a partial write would leave the
+                // receiver parsing the next message from its middle.
+                let room = raw.status().map(|s| s.get_avail()).unwrap_or(0);
+                if room < msg.len() || raw.io().write(msg).is_err() {
+                    self.dropped += 1;
+                    if self.dropped.is_power_of_two() {
+                        warn!("MIDI out: {} messages dropped", self.dropped);
+                    }
+                }
+            }
+            Some(Conn::Seq(conn)) => {
+                let _ = conn.send(msg);
+            }
+            None => (),
         }
     }
 
@@ -121,13 +165,13 @@ mod tests {
 
     #[test]
     fn test_new() -> Result<(), Box<dyn Error>> {
-        MidiOut::new();
+        MidiOut::new("hw:CARD=haxophone");
         Ok(())
     }
 
     #[test]
     fn test_note() -> Result<(), Box<dyn Error>> {
-        let mut midi = MidiOut::new();
+        let mut midi = MidiOut::new("hw:CARD=haxophone");
         midi.noteon(66, 100);
         sleep(Duration::from_millis(1000));
         midi.noteoff(66);
@@ -136,7 +180,7 @@ mod tests {
 
     #[test]
     fn test_cc() -> Result<(), Box<dyn Error>> {
-        let mut midi = MidiOut::new();
+        let mut midi = MidiOut::new("hw:CARD=haxophone");
         midi.noteon(66, 100);
         sleep(Duration::from_millis(1000));
         const MIDI_CC_VOLUME: i32 = 7;
