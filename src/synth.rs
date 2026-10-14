@@ -17,6 +17,8 @@ const AUDIO_DEVICE_TIMEOUT_MS: u64 = 30_000;
 pub fn try_init(
     sf2file: &str,
     banknum: i32,
+    startup_sf2_file: &str,
+    startup_midi_file: &str,
 ) -> (synth::Synth, settings::Settings, audio::AudioDriver) {
     let mut settings = settings::Settings::new();
     // try to optimize for low latency
@@ -62,37 +64,20 @@ pub fn try_init(
 
     let adriver = audio::AudioDriver::new(&mut settings, &mut syn);
 
-    // Use FluidR3_GM.sf2 with multiple instruments for midi file
-    let startup_sf2_filename = "/usr/share/sounds/sf2/FluidR3_GM.sf2";
-    let sf2startup = syn.sfload(startup_sf2_filename, 1);
-
-    if sf2startup == None {
-        warn!("Failed to load sound font file {}", startup_sf2_filename);
-    }
-
-    // Enable polyphony for midi file
-    if !syn.set_polyphony(16) {
-        warn!("Failed to set polyphony to 16");
-    }
-
-    // Select bank 0
-    syn.program_change(0, 0);
-
-    // Play the midi file
-    let player = midi::Player::new(&mut syn);
-    player.add("/usr/share/haxo/Startup_Haxophone.mid");
-    player.play();
-
-    // Wait until midi file is finished
-    while player.get_status() == midi::PlayerStatus::Playing {
-        // wait ..
-    }
-
-    // Polyphony stays at 16 for the sax as well. The main loop already ends
+    // Polyphony 16 for the jingle and for the sax alike. The main loop ends
     // each note before the next, and a preset can need several voices per
     // note (layers, stereo sample pairs): with polyphony 1 fluidsynth kept
     // one of them, sometimes a silent one, and logged "Failed to allocate a
     // synthesis process" for the rest.
+    if !syn.set_polyphony(16) {
+        warn!("Failed to set polyphony to 16");
+    }
+
+    let sf2startup = if startup_midi_file.is_empty() {
+        None
+    } else {
+        play_jingle(&mut syn, startup_sf2_file, startup_midi_file)
+    };
 
     let sf2 = syn.sfload(sf2file, 1);
 
@@ -106,7 +91,7 @@ pub fn try_init(
     // the channels always have presets to resolve to.
     if let Some(id) = sf2startup {
         if !syn.sfunload(id, true) {
-            warn!("Failed to unload sound font file {}", startup_sf2_filename);
+            warn!("Failed to unload sound font file {}", startup_sf2_file);
         }
         // Its samples were freed under the user's soundfont, where glibc
         // keeps them in the heap: hand those pages back (13 MB on a Zero 2 W).
@@ -118,4 +103,22 @@ pub fn try_init(
     syn.program_change(0, banknum);
     println!("Synth created");
     (syn, settings, adriver)
+}
+
+// Play the startup jingle with its own soundfont (a General MIDI one: the
+// jingle uses several instruments), and return that soundfont's id.
+fn play_jingle(syn: &mut synth::Synth, sf2file: &str, midifile: &str) -> Option<u32> {
+    let id = syn.sfload(sf2file, 1);
+    if id == None {
+        warn!("Failed to load sound font file {}", sf2file);
+    }
+    syn.program_change(0, 0);
+
+    let player = midi::Player::new(syn);
+    player.add(midifile);
+    player.play();
+    while player.get_status() == midi::PlayerStatus::Playing {
+        thread::sleep(Duration::from_millis(10));
+    }
+    id
 }

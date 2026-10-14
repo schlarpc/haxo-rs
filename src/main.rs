@@ -36,6 +36,12 @@ struct Opt {
     notemap_file: String,
     #[structopt(short, long, default_value = "-14")]
     transpose: i32,
+    /// Soundfont for the startup jingle; unloaded once it has played
+    #[structopt(long, default_value = "/usr/share/sounds/sf2/FluidR3_GM.sf2")]
+    startup_sf2_file: String,
+    /// Startup jingle (a MIDI file); empty to start without one
+    #[structopt(long, default_value = "/usr/share/haxo/Startup_Haxophone.mid")]
+    startup_midi_file: String,
 }
 
 #[derive(PartialEq)]
@@ -67,7 +73,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let opt = Opt::from_args();
     debug!("{:?}", opt);
 
-    let (synth, _settings, _adriver) = synth::try_init(&opt.sf2_file, opt.prog_number);
+    let (synth, _settings, _adriver) = synth::try_init(
+        &opt.sf2_file,
+        opt.prog_number,
+        &opt.startup_sf2_file,
+        &opt.startup_midi_file,
+    );
     #[cfg(feature = "midi")]
     let mut midi_out = midi::MidiOut::new();
 
