@@ -36,11 +36,12 @@ impl Pressure {
             }
         };
 
-        debug!(
-            "I2C: Created on bus {} at {} Hz",
-            i2c.bus(),
-            i2c.clock_speed()?
-        );
+        // rppal reads the clock speed from a sysfs file that the mainline
+        // I2C driver doesn't provide, so it is only logged when available.
+        match i2c.clock_speed() {
+            Ok(hz) => debug!("I2C: Created on bus {} at {} Hz", i2c.bus(), hz),
+            Err(_) => debug!("I2C: Created on bus {}", i2c.bus()),
+        }
 
         // Set the I2C slave address to the device we're communicating with.
         i2c.set_slave_address(ADDR_PRESSURE_SENSOR)?;
