@@ -7,6 +7,10 @@ use std::time::Duration;
 
 use crate::alsa;
 
+extern "C" {
+    fn malloc_trim(pad: usize) -> i32;
+}
+
 const AUDIO_DEVICE_POLL_MS: u64 = 250;
 const AUDIO_DEVICE_TIMEOUT_MS: u64 = 30_000;
 
@@ -94,6 +98,21 @@ pub fn try_init(
 
     if sf2 == None {
         warn!("Failed to load sound font file {}", sf2file);
+    }
+
+    // The startup soundfont is only for the jingle. Left loaded, it holds
+    // its samples in memory, and programs missing from the user's soundfont
+    // fall through to it. Unloaded after the user's soundfont is in, so
+    // the channels always have presets to resolve to.
+    if let Some(id) = sf2startup {
+        if !syn.sfunload(id, true) {
+            warn!("Failed to unload sound font file {}", startup_sf2_filename);
+        }
+        // Its samples were freed under the user's soundfont, where glibc
+        // keeps them in the heap: hand those pages back (13 MB on a Zero 2 W).
+        unsafe {
+            malloc_trim(0);
+        }
     }
     // select bank number
     syn.program_change(0, banknum);
