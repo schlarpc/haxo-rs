@@ -72,7 +72,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let (synth, _settings, _adriver) = synth::try_init(&opt.sf2_file, opt.prog_number);
     #[cfg(feature = "midi")]
-    let mut midi_out = midi::MidiOut::new()?;
+    let mut midi_out = midi::MidiOut::new();
 
     let tick = periodic(Duration::from_micros(TICK_USECS as u64));
     // Use UART RXD pin to monitor timing of periodic task.  This is easily
@@ -116,13 +116,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         let pressure = sensor.read()?;
         let vol = max(0, pressure);
         const MIDI_CC_VOLUME: i32 = 7;
-        const MIDI_CC_BREATH: i32 = 2;
         if last_vol != vol {
             synth.cc(0, MIDI_CC_VOLUME, vol);
             #[cfg(feature = "midi")]
-            midi_out.cc(MIDI_CC_BREATH, vol);
+            midi_out.breath(vol);
             last_vol = vol;
         }
+        #[cfg(feature = "midi")]
+        midi_out.poll();
 
         if notemap.is_recording() {
             notemap.record(keys, pressure);

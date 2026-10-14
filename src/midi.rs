@@ -1,15 +1,41 @@
 use midir::{MidiOutput, MidiOutputConnection, MidiOutputPort};
 
 use std::error::Error;
+use std::time::{Duration, Instant};
 
-use log::info;
+use log::{info, warn};
+
+// A BLE MIDI link carries a packet every 15-50 ms, and breath changes on
+// almost every 2 ms tick; sent as they come, the messages queue up and the
+// notes behind them arrive late. Breath goes out at most this often, always
+// with the latest value.
+const BREATH_INTERVAL: Duration = Duration::from_millis(10);
 
 pub struct MidiOut {
-    conn_out: MidiOutputConnection,
+    // None when there was no port to connect to: the synth still plays.
+    conn_out: Option<MidiOutputConnection>,
+    // Breath CC value not yet sent, and when one was last sent.
+    breath_pending: Option<u8>,
+    breath_sent_at: Option<Instant>,
 }
 
 impl MidiOut {
-    pub fn new() -> Result<Self, Box<dyn Error>> {
+    pub fn new() -> Self {
+        let conn_out = match MidiOut::connect() {
+            Ok(conn) => Some(conn),
+            Err(e) => {
+                warn!("MIDI out disabled: {}", e);
+                None
+            }
+        };
+        MidiOut {
+            conn_out,
+            breath_pending: None,
+            breath_sent_at: None,
+        }
+    }
+
+    fn connect() -> Result<MidiOutputConnection, Box<dyn Error>> {
         let midi_out = MidiOutput::new("Midi Output")?;
 
         let out_ports = midi_out.ports();
@@ -34,21 +60,53 @@ impl MidiOut {
                 &out_ports[i - 1]
             }
         };
-        let conn_out = midi_out.connect(out_port, "haxophone")?;
-        Ok(MidiOut { conn_out })
+        Ok(midi_out.connect(out_port, "haxophone")?)
+    }
+
+    fn send(&mut self, msg: &[u8]) {
+        if let Some(conn) = self.conn_out.as_mut() {
+            let _ = conn.send(msg);
+        }
     }
 
     pub fn noteon(&mut self, note: i32, vel: i32) {
         const NOTE_ON_MSG: u8 = 0x90;
-        let _ = self.conn_out.send(&[NOTE_ON_MSG, note as u8, vel as u8]);
+        // The receiver should start the note at the current breath.
+        self.flush_breath();
+        self.send(&[NOTE_ON_MSG, note as u8, vel as u8]);
     }
+    #[allow(dead_code)]
     pub fn cc(&mut self, msg: i32, val: i32) {
         const CC_MSG: u8 = 0xB0;
-        let _ = self.conn_out.send(&[CC_MSG, msg as u8, val as u8]);
+        self.send(&[CC_MSG, msg as u8, val as u8]);
     }
     pub fn noteoff(&mut self, note: i32) {
         const NOTE_OFF_MSG: u8 = 0x80;
-        let _ = self.conn_out.send(&[NOTE_OFF_MSG, note as u8, 0u8]);
+        self.flush_breath();
+        self.send(&[NOTE_OFF_MSG, note as u8, 0u8]);
+    }
+
+    // Breath (CC#2), rate-limited to BREATH_INTERVAL. Call poll() every
+    // tick so a held-back value goes out once the interval has passed.
+    pub fn breath(&mut self, val: i32) {
+        self.breath_pending = Some(val as u8);
+        self.poll();
+    }
+    pub fn poll(&mut self) {
+        let due = match self.breath_sent_at {
+            Some(t) => t.elapsed() >= BREATH_INTERVAL,
+            None => true,
+        };
+        if due {
+            self.flush_breath();
+        }
+    }
+    fn flush_breath(&mut self) {
+        const MIDI_CC_BREATH: u8 = 2;
+        if let Some(val) = self.breath_pending.take() {
+            self.send(&[0xB0, MIDI_CC_BREATH, val]);
+            self.breath_sent_at = Some(Instant::now());
+        }
     }
 }
 
@@ -63,13 +121,13 @@ mod tests {
 
     #[test]
     fn test_new() -> Result<(), Box<dyn Error>> {
-        MidiOut::new()?;
+        MidiOut::new();
         Ok(())
     }
 
     #[test]
     fn test_note() -> Result<(), Box<dyn Error>> {
-        let mut midi = MidiOut::new()?;
+        let mut midi = MidiOut::new();
         midi.noteon(66, 100);
         sleep(Duration::from_millis(1000));
         midi.noteoff(66);
@@ -78,7 +136,7 @@ mod tests {
 
     #[test]
     fn test_cc() -> Result<(), Box<dyn Error>> {
-        let mut midi = MidiOut::new()?;
+        let mut midi = MidiOut::new();
         midi.noteon(66, 100);
         sleep(Duration::from_millis(1000));
         const MIDI_CC_VOLUME: i32 = 7;
