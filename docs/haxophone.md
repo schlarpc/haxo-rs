@@ -380,8 +380,9 @@ Ways to measure each:
 
 ## Patches to make
 
-- Polyphony 8-16 with per-channel mono/legato mode instead of
-  `set_polyphony(1)` (see #29 above).
+- Per-channel mono/legato mode (`fluid_synth_set_basic_channel`), if
+  legato phrasing is wanted: polyphony is fixed (8a9ae25), and the main
+  loop's note-off before every note-on already keeps the sax monophonic.
 - Bluetooth MIDI: a BLE MIDI GATT service of our own (e.g. the `bluer`
   crate), so phones and DAWs can connect to the instrument; after the
   breath CC cap (see #41 above).
@@ -392,7 +393,8 @@ Ways to measure each:
   tracks in it (#24, #29).
 - MIDI out through the gadget's rawmidi device, found by card ID, instead of
   ALSA sequencer ports.
-- Unload FluidR3 after the jingle, or ship a small startup soundfont.
+- Program change in Control mode steps through the presets the soundfont
+  has, instead of clamping to 0-127 (the rest of #26).
 - Idle mode for battery: after N seconds with no breath and no keys, drop the
   tick rate and close the PCM streams; the codec driver then pulls SD_MODE
   low and shuts the amp down. Resume on breath.
@@ -432,6 +434,17 @@ compiled):
   commit makes MIDI out optional: with no port, haxo warns and keeps
   playing (not reproduced on the board: `snd_seq_dummy` always provides
   a port).
+- 8a9ae25: polyphony stays at 16 instead of 1 (#29). Measured 2026-10-14,
+  GeneralUser GS program 66, about 40 s of playing each: with polyphony 1,
+  64 "Failed to allocate a synthesis process" per 81 note-ons; with 16,
+  none per 26 note-ons. Every note started at least 2 voices (a stereo
+  pair; fluidsynth had kept only one), at most 10 with release tails
+  overlapping. By ear: "much richer".
+- 6bf810a: FluidR3 is unloaded after the jingle, once the user's soundfont
+  is loaded, then `malloc_trim(0)` (#26). haxo's RSS went from 103 MB to
+  57 MB. Unloading before the load reached 60 MB but left every channel
+  without a preset for a moment (16 "No preset found" warnings); unloading
+  after it without the trim stayed at 73 MB, freed pages stuck in the heap.
 
 ## USB gadget (nixos/gadget.nix)
 
