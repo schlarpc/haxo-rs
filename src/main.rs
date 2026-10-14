@@ -209,29 +209,27 @@ fn main() -> Result<(), Box<dyn Error>> {
         midi_out.poll();
 
         if let Some(control) = control.as_mut() {
-            for c in control.commands() {
-                match c {
-                    control::Cmd::Program(p) => cmd.set_program(p),
-                    control::Cmd::Transpose(t) => {
-                        notemap.transpose = t;
-                        info!("Set transpose to {}", t);
+            for set in control.commands() {
+                if let Some(path) = set.soundfont {
+                    let program = set.program.unwrap_or(cmd.program());
+                    info!("Loading sound font {}", path);
+                    if let Some(id) = synth::switch_soundfont(&synth, soundfont_id, &path, program)
+                    {
+                        soundfont_id = Some(id);
+                        live.soundfont = path;
+                        cmd.reload_programs();
+                        cmd.set_program(program);
                     }
-                    control::Cmd::Volume(v) => {
-                        synth::set_volume(&synth, v);
-                        live.volume = v;
-                    }
-                    control::Cmd::Soundfont(path, program) => {
-                        let program = program.unwrap_or(cmd.program());
-                        info!("Loading sound font {}", path);
-                        if let Some(id) =
-                            synth::switch_soundfont(&synth, soundfont_id, &path, program)
-                        {
-                            soundfont_id = Some(id);
-                            live.soundfont = path;
-                            cmd.reload_programs();
-                            cmd.set_program(program);
-                        }
-                    }
+                } else if let Some(p) = set.program {
+                    cmd.set_program(p);
+                }
+                if let Some(t) = set.transpose {
+                    notemap.transpose = t;
+                    info!("Set transpose to {}", t);
+                }
+                if let Some(v) = set.volume {
+                    synth::set_volume(&synth, v);
+                    live.volume = v;
                 }
             }
             live.keys = keys;

@@ -474,6 +474,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "haxo-control"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "haxo001"
 version = "0.1.0"
 dependencies = [
@@ -483,6 +491,7 @@ dependencies = [
  "fluidsynth",
  "futures",
  "gpiocdev",
+ "haxo-control",
  "libc",
  "log",
  "midir",
