@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 use structopt::StructOpt;
 
 mod alsa;
+#[cfg(feature = "ble")]
+mod ble;
 mod commands;
 mod cues;
 mod idle;
@@ -45,6 +47,10 @@ struct Opt {
     #[cfg(feature = "midi")]
     #[structopt(long, default_value = "hw:CARD=haxophone")]
     midi_out: String,
+    /// Also send MIDI over Bluetooth LE, advertised under this name
+    #[cfg(feature = "ble")]
+    #[structopt(long)]
+    ble_midi: Option<String>,
     /// Seconds without breath or key changes before the audio output is
     /// closed (shutting the amp down) until the next one; 0 never closes it
     #[structopt(long, default_value = "0")]
@@ -92,7 +98,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         &opt.startup_midi_file,
     );
     #[cfg(feature = "midi")]
-    let mut midi_out = midi::MidiOut::new(&opt.midi_out);
+    let mut midi_out = midi::MidiOut::new(&opt.midi_out, {
+        #[cfg(feature = "ble")]
+        let ble = opt.ble_midi.as_deref();
+        #[cfg(not(feature = "ble"))]
+        let ble = None;
+        ble
+    });
 
     // Use UART RXD pin to monitor timing of periodic task.  This is easily
     // accessible on the haxophone HAT when the console is disabled.

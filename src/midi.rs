@@ -27,6 +27,9 @@ pub struct MidiOut {
     conn_out: Option<Conn>,
     // Messages dropped because the rawmidi buffer was full.
     dropped: u64,
+    // The same messages over Bluetooth LE MIDI, when it is on.
+    #[cfg(feature = "ble")]
+    ble: Option<crate::ble::BleMidi>,
     // Breath CC value not yet sent, and when one was last sent.
     breath_pending: Option<u8>,
     breath_sent_at: Option<Instant>,
@@ -36,7 +39,7 @@ impl MidiOut {
     // Send to the rawmidi `device` (e.g. "hw:CARD=haxophone", the USB
     // gadget's MIDI function), or when it can't be opened, to a sequencer
     // port as upstream does.
-    pub fn new(device: &str) -> Self {
+    pub fn new(device: &str, #[allow(unused)] ble_name: Option<&str>) -> Self {
         let conn_out = match Rawmidi::new(device, Direction::Playback, true) {
             Ok(raw) => {
                 info!("MIDI out to {}", device);
@@ -56,6 +59,8 @@ impl MidiOut {
         let mut midi = MidiOut {
             conn_out,
             dropped: 0,
+            #[cfg(feature = "ble")]
+            ble: ble_name.map(crate::ble::BleMidi::start),
             breath_pending: None,
             breath_sent_at: None,
         };
@@ -94,6 +99,10 @@ impl MidiOut {
     }
 
     fn send(&mut self, msg: &[u8]) {
+        #[cfg(feature = "ble")]
+        if let Some(ble) = self.ble.as_mut() {
+            ble.send(msg);
+        }
         match self.conn_out.as_mut() {
             Some(Conn::Raw(raw)) => {
                 // Whole messages only: a partial write would leave the
@@ -165,13 +174,13 @@ mod tests {
 
     #[test]
     fn test_new() -> Result<(), Box<dyn Error>> {
-        MidiOut::new("hw:CARD=haxophone");
+        MidiOut::new("hw:CARD=haxophone", None);
         Ok(())
     }
 
     #[test]
     fn test_note() -> Result<(), Box<dyn Error>> {
-        let mut midi = MidiOut::new("hw:CARD=haxophone");
+        let mut midi = MidiOut::new("hw:CARD=haxophone", None);
         midi.noteon(66, 100);
         sleep(Duration::from_millis(1000));
         midi.noteoff(66);
@@ -180,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_cc() -> Result<(), Box<dyn Error>> {
-        let mut midi = MidiOut::new("hw:CARD=haxophone");
+        let mut midi = MidiOut::new("hw:CARD=haxophone", None);
         midi.noteon(66, 100);
         sleep(Duration::from_millis(1000));
         const MIDI_CC_VOLUME: i32 = 7;
