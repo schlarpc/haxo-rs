@@ -74,11 +74,11 @@
     "haxo-rs": {
       "flake": false,
       "locked": {
-        "lastModified": 1791995229,
-        "narHash": "sha256-27HcZCv3u0AsefrgwLBONh31CEAJ6BrLtoqaclXjo6Y=",
+        "lastModified": 1791997683,
+        "narHash": "sha256-DEgtTUDxzRBeXJ/lcj6UYL5G2efQuTuP3+VjLt1HSPY=",
         "owner": "schlarpc",
         "repo": "haxo-rs",
-        "rev": "85984f92799d6ad30e7c401099aa19aaeca26262",
+        "rev": "b0a68fdce4bfb53c767584a1eeec496dafe0f3cc",
         "type": "github"
       },
       "original": {

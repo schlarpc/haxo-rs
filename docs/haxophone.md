@@ -37,8 +37,8 @@ Roughly in order. Details are in the sections named.
    on the board first ("Upstream issues"). What's left there needs someone
    playing (idle wake-up, BLE MIDI from a phone, the pressure spikes) or
    step 3 below.
-5. **Bluetooth MIDI** is in haxo-rs (193ea18); try it from a phone or a
-   DAW and settle pairing.
+5. **Bluetooth MIDI** is in haxo-rs (193ea18, pairing b0a68fd); try it
+   from a phone or a DAW.
 6. **Own render loop with the Bluetooth bridge** ("Outputs", build order
    step 3).
 7. **USB audio out** (UAC2, "TODO: USB audio out"), and the **web UI**
@@ -390,10 +390,7 @@ Ways to measure each:
   loop's note-off before every note-on already keeps the sax monophonic.
 - Idle mode on in the service (`--idle-secs`), once waking up has been
   tried on the board: see f65a60f below.
-- BLE MIDI from a phone or a DAW, and pairing: see 193ea18 below. The
-  board isn't pairable; a central that insists on pairing (bagel's
-  BlueZ+PipeWire did, for its own MIDI service) gets disconnected. Decide
-  whether to allow "just works" pairing.
+- BLE MIDI from a phone or a DAW: see 193ea18 and b0a68fd below.
 - Play through 85984f9's median filter and check that breath onsets
   don't feel late (2 ms of lag by design).
 
@@ -511,6 +508,16 @@ compiled):
   off. Reading the sensor before the key scan didn't help (A/B, 55 s at
   rest each: 21 and 22 note-ons in 40 s); the median: 0, and no pressure
   ticks at all. One sample (2 ms) of lag on a breath onset.
+- b0a68fd: pairing, decided 2026-10-14 ("simple pairing is fine"). With
+  `--ble-midi` the adapter is pairable with no timeout, and haxo is the
+  default agent, accepting confirmation, authorization and service
+  requests. bluer's unset handlers reject (its docs say they accept), and
+  any accepting handler registers as DisplayYesNo, so a phone shows a
+  code and a Pair button; the board confirms by itself. Before it, a
+  pairing from bagel failed ("Numeric comparison failed", btmon). After:
+  paired and bonded, the bond in /var/lib/bluetooth (persisted), MIDI on
+  bagel's "haxophone Bluetooth" sequencer port. The test bond was
+  removed on both sides.
 
 ## USB gadget (nixos/gadget.nix)
 
