@@ -12,8 +12,8 @@ Raspberry Pi Zero 2 W. Design notes and decisions: [docs/haxophone.md](docs/haxo
 | `nixos/wifi.nix` | iwd + networkd + Avahi |
 | `nixos/bluetooth.nix` | BlueZ + PipeWire for Bluetooth audio out (not fed yet) |
 | `nixos/config-file.nix` | Applies `config/haxophone.toml` from the card at boot |
-| `webui/` | Web UI spike (frontend only, mocked; docs/webui.md) |
-| `packages/` | haxo-rs (from our fork), umtprd, the settings tool, the minting app |
+| `nixos/webui.nix` | The web UI on port 80 (haxo-web, from the haxo-rs workspace; docs/webui.md) |
+| `packages/` | haxo-rs and haxo-web (from our fork), umtprd, the settings tool, the minting app |
 
 `nix develop` provides `deploy`.
 

@@ -4,8 +4,9 @@
 # in as `haxophone` and the Wi-Fi networks to join (format and template in
 # packages/haxophone-config).
 #
-# A oneshot applies it at every boot: iwd's network files into /var/lib/iwd
-# and the keys into /run, both on tmpfs, so the file is the whole lifecycle.
+# A oneshot applies it at every boot: iwd's network files into /var/lib/iwd,
+# the keys into /run, and haxo's instrument settings into an environment
+# file, all on tmpfs, so the file is the whole lifecycle.
 # After editing it on the board: `systemctl restart haxophone-config iwd`.
 #
 # The file is plain text on the card, but so is everything else: whoever
@@ -13,6 +14,7 @@
 {
   lib,
   pkgs,
+  haxo,
   ...
 }:
 let
@@ -34,7 +36,13 @@ in
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
-      ExecStart = "${lib.getExe haxophone-config} apply --keys-dir ${keysDir}";
+      ExecStart = lib.concatStringsSep " " [
+        "${lib.getExe haxophone-config} apply --keys-dir ${keysDir}"
+        "--haxo-env ${haxo.envFile}"
+        # Where [instrument] soundfont names are looked up.
+        "--soundfont-dir ${haxo.soundfontDir}"
+        "--soundfont-dir ${haxo.filesDir}"
+      ];
     };
   };
 

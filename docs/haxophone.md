@@ -41,10 +41,9 @@ Roughly in order. Details are in the sections named.
    from a phone or a DAW.
 6. **Own render loop with the Bluetooth bridge** ("Outputs", build order
    step 3).
-7. **USB audio out** (UAC2, "TODO: USB audio out"), and the **web UI**
-   ("TODO: web UI"): a frontend spike with a mock backend is in
-   `webui/`, and its API contract in docs/webui.md; the backend and the
-   haxo-rs hooks it needs are next.
+7. **USB audio out** (UAC2, "TODO: USB audio out"), and the **web UI**'s
+   remaining parts (docs/webui.md, "Open"): it is served by the board
+   since 2026-10-14; the audio tap waits for step 6.
 
 ## Bootstrap (schlarpc-flake hosts/haxophone, 2026-10-12)
 
@@ -193,32 +192,20 @@ switch between songs. SF3 saves disk only; samples are decoded to 16-bit on
 load. nixpkgs' fluidsynth has no PipeWire driver (JACK and PulseAudio only),
 which the own-loop design doesn't need.
 
-## TODO: web UI (listen to the mix, change settings)
+## Web UI (docs/webui.md)
 
-Spike (2026-10-13): `webui/index.html`, frontend only with an in-page mock;
-the API it needs is in docs/webui.md.
+Served by the board since 2026-10-14: `haxo-web`, a second binary in the
+haxo-rs workspace, on port 80 over the USB link and Wi-Fi. Live keys,
+breath and note; Wi-Fi, Bluetooth and soundfonts; the instrument's
+settings, live through haxo001's control socket and kept in the settings
+file's `[instrument]`. Over Wi-Fi it needs the `[web]` password. Decided
+on the way: the settings file stays the one source of truth (the server
+edits it through haxophone-config); the server is Rust, in the haxo-rs
+workspace with the control protocol as a shared crate.
 
-A web server on the board, reachable over the USB gadget and Wi-Fi
-(haxophone.local), with:
-- A page that plays the device's audio mix live in the browser. Take it
-  from the own render loop as one more tap, like the Bluetooth bridge (see
-  Outputs): a ring buffer written without blocking, so a slow or vanished
-  listener can never stall the IEM path. Latency matters less here than
-  for the player (listening, recording a take), so encoding (e.g. Opus
-  over WebRTC or WebSocket) is acceptable if the CPU allows it next to the
-  synth.
-- Settings: Wi-Fi networks, plus the instrument settings the key combos
-  reach today (program/soundfont, transpose, volume) and later ones (output
-  levels, backing tracks).
-
-Open questions:
-- Wi-Fi networks come from the settings file on the card (see "Settings
-  file"). The web UI could edit that same file, which keeps one source of
-  truth.
-- Auth: anyone on the same Wi-Fi could reach it. At least a password, and
-  maybe settings only over the USB link.
-- CPU cost of the server and the encoder, measured against the synth's
-  headroom (see the measurement rule under "Upstream issues").
+Still open: the audio tap (one more tap on the own render loop, a ring
+buffer written without blocking, maybe Opus if the CPU allows), and the
+server's CPU cost measured against the synth's headroom.
 
 ## HAT audio hardware (from haxo-hw `haxophone001.kicad_sch` netlist)
 

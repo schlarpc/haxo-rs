@@ -20,9 +20,23 @@ let
     src = inputs.haxo-rs;
   };
 
-  soundfont = "${pkgs.soundfont-generaluser-gs}/share/soundfonts/GeneralUser-GS.sf2";
+  soundfontDir = "${pkgs.soundfont-generaluser-gs}/share/soundfonts";
+  soundfont = "${soundfontDir}/GeneralUser-GS.sf2";
 in
 {
+  # Shared with config-file.nix and webui.nix.
+  _module.args.haxo = {
+    package = haxo-rs;
+    inherit soundfont soundfontDir;
+    # Uploaded soundfonts: the MTP storage (gadget.nix), so a computer on
+    # the USB cable sees them too.
+    filesDir = "/var/lib/haxophone/files";
+    # The instrument's settings from the settings file ([instrument]),
+    # written by haxophone-config at boot.
+    envFile = "/run/haxophone-config/haxo.env";
+    controlSocket = "/run/haxo/control.sock";
+  };
+
   imports = [
     ./base.nix
     ./boot.nix
@@ -31,6 +45,7 @@ in
     ./bluetooth.nix
     ./gadget.nix
     ./wifi.nix
+    ./webui.nix
   ];
 
   nixpkgs.hostPlatform = "aarch64-linux";
@@ -50,6 +65,7 @@ in
       "sound.target"
       "usb-gadget-bind.service"
       "bluetooth.service"
+      "haxophone-config.service"
     ];
     partOf = [
       "usb-gadget-bind.service"
@@ -60,15 +76,29 @@ in
       Type = "idle";
       Restart = "always";
       RestartSec = 1;
-      Environment = "RUST_LOG=info";
+      # The defaults; [instrument] in the settings file overrides them
+      # (haxophone-config writes the EnvironmentFile), and the web UI
+      # changes them live through the control socket.
+      Environment = [
+        "RUST_LOG=info"
+        "HAXO_SOUNDFONT=${soundfont}"
+        "HAXO_PROGRAM=66" # GM tenor sax, zero-based
+        "HAXO_TRANSPOSE=-14" # tenor
+        "HAXO_VOLUME=100"
+      ];
+      EnvironmentFile = "-/run/haxophone-config/haxo.env";
+      RuntimeDirectory = "haxo";
       ExecStart = lib.concatStringsSep " " [
         (lib.getExe haxo-rs)
         "--notemap-file ${haxo-rs}/share/haxo/notemap.json"
-        "--prog-number 66" # GM tenor sax, zero-based
-        "--sf2-file ${soundfont}"
+        "--sf2-file \${HAXO_SOUNDFONT}"
+        "--prog-number \${HAXO_PROGRAM}"
+        "--transpose \${HAXO_TRANSPOSE}"
+        "--volume \${HAXO_VOLUME}"
         "--startup-sf2-file ${soundfont}"
         "--startup-midi-file ${haxo-rs}/share/haxo/Startup_Haxophone.mid"
         "--ble-midi haxophone"
+        "--control-socket /run/haxo/control.sock"
       ];
     };
   };
