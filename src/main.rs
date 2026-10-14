@@ -9,8 +9,6 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use schedule_recv::periodic;
-
 use structopt::StructOpt;
 
 mod alsa;
@@ -75,7 +73,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     #[cfg(feature = "midi")]
     let mut midi_out = midi::MidiOut::new();
 
-    let tick = periodic(Duration::from_micros(TICK_USECS as u64));
     // Use UART RXD pin to monitor timing of periodic task.  This is easily
     // accessible on the haxophone HAT when the console is disabled.
     #[cfg(feature = "instrumentation")]
@@ -108,10 +105,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     const NEG_PRESS_INIT_VAL: u32 = NEG_PRESS_COUNTDOWN_MS * 1000 / TICK_USECS;
     let mut neg_pressure_countdown: u32 = NEG_PRESS_INIT_VAL;
     let mut last_vol: i32 = 0;
-    let mut tick_stats = ticks::TickStats::new(Duration::from_micros(TICK_USECS as u64));
+    // After every thread is started: new threads would inherit the policy.
+    ticks::make_realtime();
+    let tick_period = Duration::from_micros(TICK_USECS as u64);
+    let mut tick = ticks::Ticker::new(tick_period);
+    let mut tick_stats = ticks::TickStats::new(tick_period);
     loop {
         tick_stats.idle();
-        tick.recv().unwrap();
+        tick.wait();
         tick_stats.wake();
         #[cfg(feature = "instrumentation")]
         busy_pin.set_high();

@@ -228,11 +228,11 @@ dependencies = [
  "env_logger",
  "fluidsynth",
  "gpiocdev",
+ "libc",
  "log",
  "midir",
  "rand",
  "rppal",
- "schedule_recv",
  "serde_json",
  "static_assertions",
  "structopt",
@@ -285,12 +285,6 @@ checksum = "49409df3e3bf0856b916e2ceaca09ee28e6871cf7d9ce97a692cacfdb2a25a47"
 dependencies = [
  "wasm-bindgen",
 ]
-
-[[package]]
-name = "lazy_static"
-version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76f033c7ad61445c5b347c7382dd1237847eb1bce590fe50365dcb33d546be73"
 
 [[package]]
 name = "lazy_static"
@@ -527,15 +521,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71d301d4193d031abdd79ff7e3dd721168a9572ef3fe51a1517aba235bd8f86e"
 
 [[package]]
-name = "schedule_recv"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca1520cf9d3182329ceb57b9a6b37eb68fe94f5d46c0be4aa2d2a522ec3d40eb"
-dependencies = [
- "lazy_static 0.2.11",
-]
-
-[[package]]
 name = "serde"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -604,7 +589,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69b041cdcb67226aca307e6e7be44c8806423d83e018bd662360a93dabce4d71"
 dependencies = [
  "clap",
- "lazy_static 1.4.0",
+ "lazy_static",
  "structopt-derive",
 ]
 

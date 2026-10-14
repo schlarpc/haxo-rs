@@ -1,7 +1,8 @@
 // Main loop timing: how late ticks wake up and how long each one's work
 // takes, summarized every REPORT_TICKS at debug level under the "ticks"
 // target (RUST_LOG=ticks=debug).
-use log::{debug, log_enabled, Level};
+use log::{debug, info, log_enabled, warn, Level};
+use std::thread;
 use std::time::{Duration, Instant};
 
 const REPORT_TICKS: u32 = 5_000;
@@ -67,5 +68,59 @@ impl TickStats {
         self.max_interval = Duration::ZERO;
         self.max_busy = Duration::ZERO;
         self.late = [0; 3];
+    }
+}
+
+// The loop's own fixed-rate timer. It runs in the calling thread, so the
+// wakeups get that thread's scheduling priority.
+pub struct Ticker {
+    period: Duration,
+    next: Instant,
+}
+
+impl Ticker {
+    pub fn new(period: Duration) -> Self {
+        Ticker {
+            period,
+            next: Instant::now() + period,
+        }
+    }
+
+    // Sleep until the next tick. Ticks missed while the loop ran late are
+    // skipped rather than run back to back.
+    pub fn wait(&mut self) {
+        let now = Instant::now();
+        if self.next > now {
+            thread::sleep(self.next - now);
+        }
+        self.next += self.period;
+        let now = Instant::now();
+        while self.next <= now {
+            self.next += self.period;
+        }
+    }
+}
+
+// Below fluidsynth's audio thread (audio.realtime-prio 99), above everything
+// else: a late tick delays note onsets.
+const LOOP_PRIORITY: i32 = 80;
+
+// Run the calling thread at realtime priority and keep the process in RAM,
+// so neither other load nor paging delays a tick. Both need root (or
+// CAP_SYS_NICE and CAP_IPC_LOCK); without them haxo runs as before.
+pub fn make_realtime() {
+    let param = libc::sched_param {
+        sched_priority: LOOP_PRIORITY,
+    };
+    if unsafe { libc::sched_setscheduler(0, libc::SCHED_FIFO, &param) } != 0 {
+        warn!(
+            "Main loop not realtime: {}",
+            std::io::Error::last_os_error()
+        );
+    } else {
+        info!("Main loop at SCHED_FIFO priority {}", LOOP_PRIORITY);
+    }
+    if unsafe { libc::mlockall(libc::MCL_CURRENT | libc::MCL_FUTURE) } != 0 {
+        warn!("Memory not locked: {}", std::io::Error::last_os_error());
     }
 }
