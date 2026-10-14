@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/haxo-control"]
+members = ["crates/haxo-control", "crates/haxo-web"]
 
 [package]
 name = "haxo001"
