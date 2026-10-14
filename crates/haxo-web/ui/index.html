@@ -253,6 +253,10 @@ input[type="checkbox"] { accent-color: var(--gold); width: 16px; height: 16px; }
 }
 footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
 footer code { font-family: var(--font-data); }
+dialog.login { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); padding: 20px; max-width: min(360px, calc(100vw - 32px)); }
+dialog.login::backdrop { background: rgb(0 0 0 / 0.45); }
+dialog.login form { display: grid; gap: 12px; }
+dialog.login .err { color: var(--bad); min-height: 1.2em; margin: 0; }
 </style>
 
 <header class="top">
@@ -288,6 +292,7 @@ footer code { font-family: var(--font-data); }
             <h2 style="margin:0">Now playing</h2>
             <span class="spacer"></span>
             <div class="seg" role="group" aria-label="Input">
+              <button id="mode-board" aria-pressed="false" hidden>Board</button>
               <button id="mode-demo" aria-pressed="true">Demo tune</button>
               <button id="mode-manual" aria-pressed="false">My fingers</button>
             </div>
@@ -387,8 +392,10 @@ footer code { font-family: var(--font-data); }
         <label class="field">Transpose
           <select id="transpose">
             <option value="0">C (concert)</option>
-            <option value="-2">B♭ (tenor, soprano)</option>
-            <option value="-9">E♭ (alto, baritone)</option>
+            <option value="-2">B♭ soprano</option>
+            <option value="-9">E♭ alto</option>
+            <option value="-14">B♭ tenor</option>
+            <option value="-21">E♭ baritone</option>
             <option value="-7">F</option>
           </select>
         </label>
@@ -415,12 +422,23 @@ footer code { font-family: var(--font-data); }
   </section>
 
   <footer>
-    Spike: everything here is simulated in the browser, nothing reaches a board. The API it stands in for is in <code>docs/webui.md</code>.
+    <span id="footer-mode">Demo: everything here is simulated in the browser, nothing reaches a board. The API it stands in for is in <code>docs/webui.md</code>.</span>
     Board drawing from <span class="mono" id="geo-source"></span>.
   </footer>
 </main>
 
 <div class="toast" id="toast" role="status" hidden></div>
+<dialog class="login" id="login" aria-labelledby="login-title">
+  <form method="dialog" id="login-form">
+    <h2 id="login-title" style="margin:0">Log in</h2>
+    <p class="hint" id="login-why" style="margin:0">Over Wi-Fi this needs the password from <span class="mono">[web]</span> in haxophone.toml. Over the USB cable it doesn't.</p>
+    <label class="field">Password
+      <input type="password" id="login-password" autocomplete="current-password" required minlength="8">
+    </label>
+    <p class="err" id="login-err" role="alert"></p>
+    <button class="btn primary" id="login-go">Log in</button>
+  </form>
+</dialog>
 
 <script>
 "use strict";
@@ -744,8 +762,10 @@ function createMockApi() {
     },
     // GET /api/soundfonts, PUT/DELETE /api/soundfonts/:name, PATCH /api/instrument
     sounds: {
-      async status() { await sleep(120); return copy(sounds); },
-      presets: (file) => presetNames(file),
+      async status() {
+        await sleep(120);
+        return { ...copy(sounds), running: true, presets: presetNames(sounds.active).map((name, program) => ({ program, name })) };
+      },
       async upload(file) {
         await sleep(600 + Math.min(2500, file.size / 20000));
         sounds.files = sounds.files.filter((f) => f.name !== file.name);
@@ -759,12 +779,121 @@ function createMockApi() {
         sounds.storage.used -= f.size;
         if (sounds.active === name) { sounds.active = "GeneralUser-GS.sf2"; sounds.preset = 66; }
       },
-      async update(patch) { await sleep(150); Object.assign(sounds, patch); return copy(sounds); },
+      async update(patch) { await sleep(150); Object.assign(sounds, patch); return this.status(); },
     },
   };
 }
 
-const api = createMockApi();
+/* The real API, when the page is served by the board (docs/webui.md).  */
+/* "Demo tune" and "My fingers" stay local; "Board" is the live state.  */
+function createRealApi() {
+  const local = createMockApi().live;
+  const listeners = new Set();
+  let board = false, ws = null;
+  const emit = (s) => listeners.forEach((fn) => fn(s));
+  local.subscribe((s) => { if (!board) emit(s); });
+  const instrument = new Set();
+
+  function openLive() {
+    ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/api/live");
+    ws.onmessage = (e) => {
+      const s = JSON.parse(e.data);
+      if (board) emit(s ? { keys: s.keys, breath: s.breath, note: s.note } : { keys: 0, breath: 0, note: null });
+      instrument.forEach((fn) => fn(s));
+    };
+    ws.onclose = () => { ws = null; setTimeout(openLive, 1000); };
+  }
+
+  async function call(method, path, body, raw) {
+    for (;;) {
+      const init = { method, credentials: "same-origin", headers: {} };
+      if (raw) init.body = body;
+      else if (body !== undefined) { init.body = JSON.stringify(body); init.headers["content-type"] = "application/json"; }
+      const res = await fetch("/api" + path, init);
+      if (res.status === 401) { await login(); continue; }
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+      if (!res.ok) throw new Error((data && data.error) || `${res.status} ${res.statusText}`);
+      return data;
+    }
+  }
+  const enc = encodeURIComponent;
+
+  return {
+    real: true,
+    live: {
+      subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+      // Instrument state (program, transpose, volume, soundfont), or null
+      // while haxo isn't running.
+      watchInstrument(fn) { instrument.add(fn); },
+      startBoard() { local.stopDemo(); board = true; if (!ws) openLive(); },
+      stopBoard() { board = false; },
+      startDemo() { board = false; local.startDemo(); },
+      stopDemo() { local.stopDemo(); },
+      press(keys) { local.press(keys); },
+      breathe(v) { local.breathe(v); },
+      open() { if (!ws) openLive(); },
+    },
+    wifi: {
+      status: () => call("GET", "/wifi"),
+      scan: () => call("POST", "/wifi/scan"),
+      connect: (ssid, psk, save) => call("POST", "/wifi/connect", { ssid, psk: psk || undefined, save }),
+      forget: (ssid) => call("DELETE", "/wifi/saved/" + enc(ssid)),
+    },
+    bluetooth: {
+      status: () => call("GET", "/bluetooth"),
+      scan: () => call("POST", "/bluetooth/scan"),
+      pair: (address) => call("POST", `/bluetooth/${enc(address)}/pair`),
+      setConnected: (address, on) => call("POST", `/bluetooth/${enc(address)}/${on ? "connect" : "disconnect"}`),
+      remove: (address) => call("DELETE", "/bluetooth/" + enc(address)),
+      setDiscoverable: (on) => call("PATCH", "/bluetooth", { discoverable: on }),
+    },
+    sounds: {
+      status: () => call("GET", "/soundfonts"),
+      upload: (file) => call("PUT", "/soundfonts/" + enc(file.name), file, true),
+      remove: (name) => call("DELETE", "/soundfonts/" + enc(name)),
+      update: (patch) => call("PATCH", "/instrument", patch),
+    },
+  };
+}
+
+// Ask for the password; resolves once logged in.
+let loginWaiting = null;
+function login() {
+  if (loginWaiting) return loginWaiting;
+  loginWaiting = new Promise((resolve) => {
+    const dlg = $("#login"), err = $("#login-err"), input = $("#login-password");
+    fetch("/api/session").then((r) => r.json()).then((s) => {
+      if (!s.password_set) {
+        $("#login-why").textContent = "Web access over Wi-Fi is off until a password is set under [web] in haxophone.toml. Over the USB cable it's always on.";
+        input.disabled = true; $("#login-go").disabled = true;
+      }
+    }).catch(() => {});
+    err.textContent = "";
+    $("#login-form").onsubmit = async (e) => {
+      e.preventDefault();
+      err.textContent = "";
+      $("#login-go").disabled = true;
+      try {
+        const res = await fetch("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: input.value }) });
+        if (res.ok) { input.value = ""; dlg.close(); loginWaiting = null; resolve(); return; }
+        const data = await res.json().catch(() => null);
+        err.textContent = (data && data.error) || "That didn't work.";
+      } finally { $("#login-go").disabled = false; }
+    };
+    dlg.oncancel = (e) => e.preventDefault();
+    dlg.showModal();
+    input.focus();
+  });
+  return loginWaiting;
+}
+
+let api = createMockApi();
+// Show an action's error instead of leaving the page stuck.
+async function attempt(fn) {
+  try { return await fn(); } catch (err) { toast(err.message); return undefined; }
+}
 
 /* ------------------------------------------------------------------ */
 /* Small helpers */
@@ -811,9 +940,9 @@ function selectTab(id, focus) {
     if (on && focus) t.focus();
   }
   store.set("haxo-tab", id);
-  if (id === "wifi") renderWifi();
-  if (id === "bluetooth") renderBt();
-  if (id === "sounds") renderSounds();
+  if (id === "wifi") attempt(renderWifi);
+  if (id === "bluetooth") attempt(renderBt);
+  if (id === "sounds") attempt(renderSounds);
 }
 tabs.forEach((t, i) => {
   t.addEventListener("click", () => selectTab(t.getAttribute("aria-controls")));
@@ -825,13 +954,15 @@ tabs.forEach((t, i) => {
 
 /* ------------------------------------------------------------------ */
 /* Status chips */
-const statusState = { wifi: "Green Room", bt: "JBL Flip 6" };
+const statusState = { wifi: "Green Room", bt: "JBL Flip 6", running: false };
 function renderStatus(patch = {}) {
   Object.assign(statusState, patch);
   const extra = statusState;
   const s = $("#status");
   s.replaceChildren(
-    el("span", { class: "chip demo", title: "No board: the page simulates one" }, el("span", { class: "dot" }), "demo board"),
+    api.real
+      ? el("span", { class: "chip " + (extra.running ? "good" : "warn") }, el("span", { class: "dot" }), extra.running ? "playing" : "instrument stopped")
+      : el("span", { class: "chip demo", title: "No board: the page simulates one" }, el("span", { class: "dot" }), "demo board"),
     el("span", { class: "chip " + (extra.wifi ? "good" : "warn") }, el("span", { class: "dot" }), extra.wifi || "no Wi-Fi"),
     el("span", { class: "chip " + (extra.bt ? "good" : "") }, el("span", { class: "dot" }), extra.bt || "no speaker"),
   );
@@ -952,21 +1083,27 @@ function toggleKey(bit) {
 }
 function setMode(m) {
   mode = m;
+  $("#mode-board").setAttribute("aria-pressed", m === "board");
   $("#mode-demo").setAttribute("aria-pressed", m === "demo");
   $("#mode-manual").setAttribute("aria-pressed", m === "manual");
   $("#breath-manual").hidden = m !== "manual";
-  if (m === "demo") api.live.startDemo();
-  else { api.live.stopDemo(); api.live.breathe(Number($("#breath-input").value)); }
+  if (m === "board") api.live.startBoard();
+  else if (m === "demo") { if (api.real) api.live.stopBoard(); api.live.startDemo(); }
+  else { if (api.real) api.live.stopBoard(); api.live.stopDemo(); api.live.breathe(Number($("#breath-input").value)); }
 }
+$("#mode-board").addEventListener("click", () => setMode("board"));
 $("#mode-demo").addEventListener("click", () => setMode("demo"));
 $("#mode-manual").addEventListener("click", () => setMode("manual"));
 $("#breath-input").addEventListener("input", (e) => api.live.breathe(Number(e.target.value)));
 
 let liveState = { keys: 0, breath: 0, note: null };
-api.live.subscribe((s) => {
-  liveState = s;
-  currentKeys = s.keys;
-});
+// Called from start(), once it's known which API this page talks to.
+function subscribeLive() {
+  api.live.subscribe((s) => {
+    liveState = s;
+    currentKeys = s.keys;
+  });
+}
 function renderLive() {
   const s = liveState;
   paintKeys(s.keys);
@@ -1025,6 +1162,7 @@ function stopAudio() {
   audio.on = false;
 }
 $("#listen").addEventListener("click", () => {
+  if (api.real) return;
   if (audio.on) { stopAudio(); $("#listen").textContent = "Listen"; }
   else { startAudio(); $("#listen").textContent = "Stop"; }
 });
@@ -1200,9 +1338,9 @@ async function renderBt() {
     ),
     el("label", { class: "row", style: "gap:8px;font-size:14px" },
       el("input", { type: "checkbox", id: "bt-discoverable", checked: a.discoverable, onchange: async (e) => {
-        await api.bluetooth.setDiscoverable(e.target.checked);
+        if (await attempt(() => api.bluetooth.setDiscoverable(e.target.checked)) === undefined) return renderBt();
         toast(e.target.checked ? "Visible to nearby devices for 3 minutes" : "Hidden from nearby devices");
-      } }), "Visible to phones and computers (for MIDI, later)"),
+      } }), "Visible to phones and computers (pairing)"),
     el("p", { class: "hint" }, "Audio goes to one speaker at a time. Players hear the in-ear jack, which never waits on Bluetooth."),
   );
   renderStatus({ bt: btConnectedName });
@@ -1211,19 +1349,21 @@ async function renderBt() {
     el("div", { class: "item" },
       el("span", { class: "glyph" }, p.connected ? "◉" : "○"),
       el("div", {}, el("div", { class: "name" }, p.name),
-        el("div", { class: "sub" }, p.connected ? el("span", { class: "pill good" }, "playing · " + p.codec) : el("span", { class: "pill muted" }, "paired"), " ", el("span", { class: "mono" }, p.address))),
+        el("div", { class: "sub" },
+          p.connected ? el("span", { class: "pill good" }, p.audio === false ? "connected" : "playing" + (p.codec ? " · " + p.codec : "")) : el("span", { class: "pill muted" }, "paired"),
+          p.audio === false ? el("span", { class: "pill muted", style: "margin-left:4px" }, "MIDI") : null,
+          " ", el("span", { class: "mono" }, p.address))),
       el("div", { class: "actions" },
         btUi.busy === p.address ? el("span", { class: "spin" }) : null,
         el("button", { class: "btn small", disabled: !!btUi.busy, onclick: async () => {
           btUi.busy = p.address; renderBt();
-          await api.bluetooth.setConnected(p.address, !p.connected);
+          const ok = await attempt(() => api.bluetooth.setConnected(p.address, !p.connected));
           btUi.busy = null;
-          toast(p.connected ? `Disconnected ${p.name}` : `Playing through ${p.name}`);
+          if (ok !== undefined) toast(p.connected ? `Disconnected ${p.name}` : `Playing through ${p.name}`);
           renderBt();
         } }, p.connected ? "Disconnect" : "Connect"),
         el("button", { class: "btn small danger", disabled: !!btUi.busy, onclick: async () => {
-          await api.bluetooth.remove(p.address);
-          toast(`Removed ${p.name}`);
+          if (await attempt(() => api.bluetooth.remove(p.address)) !== undefined) toast(`Removed ${p.name}`);
           renderBt();
         } }, "Remove")),
     )) : [el("p", { class: "empty" }, "No speakers paired yet.")]));
@@ -1244,10 +1384,12 @@ function renderBtNearby() {
           ? el("span", { class: "hint" }, el("span", { class: "spin" }), " Pairing…")
           : el("button", { class: "btn small primary", disabled: !!btUi.busy, onclick: async () => {
               btUi.busy = d.address; renderBtNearby();
-              await api.bluetooth.pair(d.address);
+              const ok = await attempt(() => api.bluetooth.pair(d.address));
               btUi.busy = null;
-              btUi.nearby = btUi.nearby.filter((n) => n.address !== d.address);
-              toast(`Paired with ${d.name || d.address}`);
+              if (ok !== undefined) {
+                btUi.nearby = btUi.nearby.filter((n) => n.address !== d.address);
+                toast(`Paired with ${d.name || d.address}`);
+              }
               renderBt();
             } }, "Pair")),
     )));
@@ -1255,7 +1397,7 @@ function renderBtNearby() {
 $("#bt-scan").addEventListener("click", async () => {
   btUi.scanning = true; renderBtNearby();
   $("#bt-scan").disabled = true;
-  btUi.nearby = await api.bluetooth.scan();
+  btUi.nearby = (await attempt(() => api.bluetooth.scan())) || btUi.nearby;
   btUi.scanning = false;
   $("#bt-scan").disabled = false;
   renderBtNearby();
@@ -1266,15 +1408,20 @@ $("#bt-scan").addEventListener("click", async () => {
 const sfUi = { confirm: null, uploading: [] };
 let transposeSemis = 0;
 async function renderSounds() {
-  const st = await api.sounds.status();
-  $("#sound-name").textContent = st.active.replace(/\.sf[23]$/, "");
+  const st = await attempt(() => api.sounds.status());
+  if (!st) return;
+  $("#sound-name").textContent = (st.active || "—").replace(/\.sf[23]$/, "");
   const active = $("#sf-active");
   active.replaceChildren(...st.files.map((f) => el("option", { value: f.name, selected: f.name === st.active }, f.name)));
-  const presets = api.sounds.presets(st.active);
-  $("#sf-preset").replaceChildren(...presets.map((p, i) => el("option", { value: i, selected: i === st.preset % presets.length }, `${String(i).padStart(3, "0")}  ${p}`)));
-  $("#transpose").value = String(st.transpose);
-  $("#volume").value = st.volume;
-  $("#volume-val").textContent = st.volume + "%";
+  $("#sf-preset").replaceChildren(...st.presets.map((p) => el("option", { value: p.program, selected: p.program === st.preset }, `${String(p.program).padStart(3, "0")}  ${p.name}`)));
+  if (st.transpose != null) {
+    const sel = $("#transpose");
+    // Set on the instrument (Transpose mode) to something not listed.
+    if (![...sel.options].some((o) => o.value === String(st.transpose)))
+      sel.append(el("option", { value: st.transpose }, `${st.transpose > 0 ? "+" : ""}${st.transpose} semitones`));
+    sel.value = String(st.transpose);
+  }
+  if (st.volume != null) { $("#volume").value = st.volume; $("#volume-val").textContent = st.volume + "%"; }
   const list = $("#sf-list");
   list.replaceChildren(
     ...st.files.map((f) => {
@@ -1289,8 +1436,8 @@ async function renderSounds() {
           f.builtin ? null
             : confirming
               ? [el("button", { class: "btn small danger", onclick: async () => {
-                  await api.sounds.remove(f.name);
                   sfUi.confirm = null;
+                  if (await attempt(() => api.sounds.remove(f.name)) === undefined) return renderSounds();
                   toast(`Deleted ${f.name}`);
                   renderSounds();
                 } }, "Delete"),
@@ -1308,20 +1455,22 @@ async function renderSounds() {
   $("#storage-fill").style.width = pct + "%";
 }
 $("#sf-active").addEventListener("change", async (e) => {
-  await api.sounds.update({ active: e.target.value, preset: 0 });
-  toast(`Loaded ${e.target.value}`);
+  toast(`Loading ${e.target.value}…`);
+  if (await attempt(() => api.sounds.update({ active: e.target.value, preset: 0 })) !== undefined) toast(`Loaded ${e.target.value}`);
   renderSounds();
 });
-$("#sf-preset").addEventListener("change", (e) => api.sounds.update({ preset: Number(e.target.value) }));
+$("#sf-preset").addEventListener("change", (e) => attempt(() => api.sounds.update({ preset: Number(e.target.value) })));
 $("#transpose").addEventListener("change", async (e) => {
   transposeSemis = Number(e.target.value);
   $("#transpose-readout").textContent = transposeSemis > 0 ? "+" + transposeSemis : String(transposeSemis);
-  await api.sounds.update({ transpose: transposeSemis });
+  await attempt(() => api.sounds.update({ transpose: transposeSemis }));
 });
+let volumeTimer;
 $("#volume").addEventListener("input", (e) => {
   volume = Number(e.target.value) / 100;
   $("#volume-val").textContent = e.target.value + "%";
-  api.sounds.update({ volume: Number(e.target.value) });
+  clearTimeout(volumeTimer);
+  volumeTimer = setTimeout(() => attempt(() => api.sounds.update({ volume: Number(e.target.value) })), 150);
 });
 async function uploadFiles(files) {
   const ok = [...files].filter((f) => /\.sf[23]$/i.test(f.name));
@@ -1330,9 +1479,9 @@ async function uploadFiles(files) {
   for (const f of ok) {
     sfUi.uploading.push(f.name);
     renderSounds();
-    await api.sounds.upload(f);
+    const ok = await attempt(() => api.sounds.upload(f));
     sfUi.uploading = sfUi.uploading.filter((n) => n !== f.name);
-    toast(`Uploaded ${f.name}`);
+    if (ok !== undefined) toast(`Uploaded ${f.name}`);
     renderSounds();
   }
 }
@@ -1343,14 +1492,48 @@ drop.addEventListener("dragleave", () => drop.classList.remove("over"));
 drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); uploadFiles(e.dataTransfer.files); });
 
 /* ------------------------------------------------------------------ */
-/* Start */
-drawBoard();
-renderStatus();
-api.sounds.status().then((st) => { $("#sound-name").textContent = st.active.replace(/\.sf[23]$/, ""); });
-setMode("demo");
+/* Start: the real API when the board serves this page, else the mock. */
+async function start() {
+  let session = null;
+  try {
+    const res = await fetch("/api/session", { signal: AbortSignal.timeout(2000) });
+    if (res.ok && (res.headers.get("content-type") || "").includes("json")) {
+      session = await res.json();
+      api = createRealApi();
+    }
+  } catch {}
+  // The live WebSocket can't ask for the password itself.
+  if (session && !session.authenticated) await login();
+  drawBoard();
+  renderStatus();
+  subscribeLive();
+  if (api.real) {
+    renderStatus({ wifi: null, bt: null });
+    attempt(async () => renderStatus({ wifi: (await api.wifi.status()).current?.ssid ?? null }));
+    attempt(async () => renderStatus({ bt: (await api.bluetooth.status()).paired.find((p) => p.connected && p.audio !== false)?.name ?? null }));
+    $("#mode-board").hidden = false;
+    $("#footer-mode").textContent = "Served by the haxophone (haxo-web).";
+    $("#listen").disabled = true;
+    $("#listen").title = "Needs the board's own render loop (docs/haxophone.md, Outputs)";
+    $("#level-val").textContent = "not yet";
+    api.live.watchInstrument((s) => {
+      renderStatus({ running: !!s });
+      if (!s) return;
+      $("#sound-name").textContent = s.soundfont.split("/").pop().replace(/\.sf[23]$/, "");
+      $("#transpose-readout").textContent = s.transpose > 0 ? "+" + s.transpose : String(s.transpose);
+    });
+    api.live.open();
+    setMode("board");
+  } else {
+    api.sounds.status().then((st) => { $("#sound-name").textContent = st.active.replace(/\.sf[23]$/, ""); });
+    setMode("demo");
+  }
+  const tabIds = ["play", "wifi", "bluetooth", "sounds"];
+  const savedTab = store.get("haxo-tab");
+  const hashTab = location.hash.slice(1);
+  selectTab(tabIds.includes(hashTab) ? hashTab : tabIds.includes(savedTab) ? savedTab : "play");
+}
 requestAnimationFrame(renderLive);
 requestAnimationFrame(driveAudio);
-const savedTab = store.get("haxo-tab");
-const hashTab = location.hash.slice(1);
-selectTab(["play", "wifi", "bluetooth", "sounds"].includes(hashTab) ? hashTab : ["play", "wifi", "bluetooth", "sounds"].includes(savedTab) ? savedTab : "play");
+start();
 </script>

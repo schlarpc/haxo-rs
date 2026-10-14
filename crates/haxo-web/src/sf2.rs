@@ -25,9 +25,8 @@ pub fn presets(path: &Path) -> std::io::Result<Vec<Preset>> {
     let bad = |m: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, m.to_string());
     let mut f = std::fs::File::open(path)?;
     let mut head = [0u8; 12];
-    f.read_exact(&mut head)?;
-    if &head[0..4] != b"RIFF" || &head[8..12] != b"sfbk" {
-        return Err(bad("not a soundfont (no RIFF sfbk header)"));
+    if f.read_exact(&mut head).is_err() || &head[0..4] != b"RIFF" || &head[8..12] != b"sfbk" {
+        return Err(bad("it has no RIFF sfbk header"));
     }
     let end = 8 + u32le(&head[4..8]) as u64;
     let mut pos = 12u64;
@@ -42,7 +41,7 @@ pub fn presets(path: &Path) -> std::io::Result<Vec<Preset>> {
         }
         pos += 8 + size + (size & 1);
     }
-    Err(bad("no preset data (pdta) in the soundfont"))
+    Err(bad("it has no preset data (pdta)"))
 }
 
 fn phdr(f: &mut std::fs::File, mut pos: u64, end: u64) -> std::io::Result<Vec<Preset>> {

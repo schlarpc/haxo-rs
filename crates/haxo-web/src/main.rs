@@ -77,21 +77,22 @@ impl App {
 pub type State = Arc<App>;
 
 // The page has no <!doctype> or <html> of its own (so it can also be
-// previewed as an Artifact); wrap it here.
+// previewed as an Artifact); wrap it here. Its <title> and <style> come
+// first, so the head is left open for them and the parser closes it.
 const PAGE: &str = include_str!("../ui/index.html");
 
 async fn page() -> Html<String> {
     Html(format!(
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
-         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         </head><body>\n{}\n</body></html>\n",
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n{}",
         PAGE
     ))
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> std::io::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,zbus=warn"))
+        .init();
     let args = Args::parse();
     let listen = args.listen;
     let app: State = Arc::new(App {

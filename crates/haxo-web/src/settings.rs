@@ -35,7 +35,12 @@ pub struct Web {
     pub password: Option<String>,
 }
 
+// Edits read the file, change it and write it back: two at once would lose
+// one of them, so they take turns.
+static EDITING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn run(args: &Args, cmd: &[&str], stdin: Option<&str>) -> Result<String> {
+    let _turn = EDITING.lock().await;
     let mut c = Command::new(&args.haxophone_config);
     c.args(cmd)
         .arg("--config")
