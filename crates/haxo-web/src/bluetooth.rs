@@ -156,9 +156,11 @@ pub async fn scan(State(app): State<crate::State>) -> Result<Json<Vec<Found>>> {
     let a = proxy(conn, ADAPTER, "org.bluez.Adapter1").await?;
     a.call_method("StartDiscovery", &()).await?;
     tokio::time::sleep(SCAN_TIME).await;
+    // Read them before stopping: BlueZ drops RSSI, which marks the devices
+    // seen in this scan, when discovery stops.
+    let seen = devices(conn).await;
     let _ = a.call_method("StopDiscovery", &()).await;
-    let mut found: Vec<Found> = devices(conn)
-        .await?
+    let mut found: Vec<Found> = seen?
         .into_iter()
         .filter(|(_, p)| !prop::<bool>(p, "Paired").unwrap_or(false))
         .filter(|(_, p)| p.contains_key("RSSI"))
