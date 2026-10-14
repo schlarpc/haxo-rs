@@ -47,6 +47,23 @@ impl<'a> Command<'a> {
             last_cmd_key: CommandKeys::Unmapped,
         }
     }
+    pub(crate) fn program(&self) -> i32 {
+        self.prog_number
+    }
+
+    // Select `program` from outside (the control socket), without a beep.
+    pub(crate) fn set_program(&mut self, program: i32) {
+        self.prog_number = program;
+        self.synth.program_change(0, program);
+        info!("New MIDI program number {}", program);
+    }
+
+    // After a soundfont change: the presets to step through.
+    pub(crate) fn reload_programs(&mut self) {
+        self.programs = crate::synth::programs(self.synth, 0);
+        info!("Soundfont has {} programs in bank 0", self.programs.len());
+    }
+
     pub(crate) fn process(self: &mut Self, key: u32) {
         let cmd_key = key2cmdkey(key);
         if cmd_key == self.last_cmd_key {

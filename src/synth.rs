@@ -108,7 +108,8 @@ pub fn try_init(
     banknum: i32,
     startup_sf2_file: &str,
     startup_midi_file: &str,
-) -> (synth::Synth, settings::Settings, Audio) {
+    volume: i32,
+) -> (synth::Synth, settings::Settings, Audio, Option<u32>) {
     let mut settings = settings::Settings::new();
     // try to optimize for low latency
     if settings.setstr("audio.driver", "alsa") {
@@ -145,11 +146,7 @@ pub fn try_init(
     }
     let mut syn = synth::Synth::new(&mut settings);
 
-    const FSYNTH_GAIN: f32 = 1.0;
-    syn.set_gain(FSYNTH_GAIN);
-    if syn.get_gain() != FSYNTH_GAIN {
-        warn!("Failed to set gain to {}", FSYNTH_GAIN);
-    }
+    set_volume(&syn, volume);
 
     let mut adriver = Audio::new();
     adriver.open(&settings, &syn);
@@ -192,7 +189,33 @@ pub fn try_init(
     // select bank number
     syn.program_change(0, banknum);
     println!("Synth created");
-    (syn, settings, adriver)
+    (syn, settings, adriver, sf2)
+}
+
+// Swap the playing soundfont for `path` and select `program`: the new one
+// loads before the old one goes, so the channel always has presets. This
+// reads the whole file, so the caller stops for the load. Returns the new
+// soundfont's id, or None (the old one stays) when it doesn't load.
+pub fn switch_soundfont(
+    syn: &synth::Synth,
+    old: Option<u32>,
+    path: &str,
+    program: i32,
+) -> Option<u32> {
+    let Some(id) = syn.sfload(path, 1) else {
+        warn!("Failed to load sound font file {}", path);
+        return None;
+    };
+    if let Some(old) = old {
+        if !syn.sfunload(old, true) {
+            warn!("Failed to unload the previous sound font");
+        }
+        unsafe {
+            malloc_trim(0);
+        }
+    }
+    syn.program_change(0, program);
+    Some(id)
 }
 
 // Play the startup jingle with its own soundfont (a General MIDI one: the
@@ -238,5 +261,14 @@ mod tests {
         assert!(!progs.is_empty());
         assert!(progs.windows(2).all(|w| w[0] < w[1]));
         assert!(progs.iter().all(|p| (0..128).contains(p)));
+    }
+}
+
+// Volume 0-100 as the synth's gain, 100 being a gain of 1.0.
+pub fn set_volume(syn: &synth::Synth, volume: i32) {
+    let gain = volume.clamp(0, 100) as f32 / 100.0;
+    syn.set_gain(gain);
+    if syn.get_gain() != gain {
+        warn!("Failed to set gain to {}", gain);
     }
 }

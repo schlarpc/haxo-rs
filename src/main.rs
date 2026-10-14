@@ -1,4 +1,4 @@
-use log::{debug, info, log_enabled, Level};
+use log::{debug, info, log_enabled, warn, Level};
 
 #[cfg(feature = "instrumentation")]
 use rppal::gpio::Gpio;
@@ -14,6 +14,7 @@ mod alsa;
 #[cfg(feature = "ble")]
 mod ble;
 mod commands;
+mod control;
 mod cues;
 mod idle;
 mod keyscan;
@@ -51,6 +52,12 @@ struct Opt {
     #[cfg(feature = "ble")]
     #[structopt(long)]
     ble_midi: Option<String>,
+    /// Volume, 0-100 (the synth's gain; 100 is a gain of 1)
+    #[structopt(long, default_value = "100")]
+    volume: i32,
+    /// Unix socket for live state and settings (JSON lines); off when unset
+    #[structopt(long)]
+    control_socket: Option<String>,
     /// Seconds without breath or key changes before the audio output is
     /// closed (shutting the amp down) until the next one; 0 never closes it
     #[structopt(long, default_value = "0")]
@@ -91,12 +98,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     let opt = Opt::from_args();
     debug!("{:?}", opt);
 
-    let (synth, settings, mut audio) = synth::try_init(
+    let (synth, settings, mut audio, mut soundfont_id) = synth::try_init(
         &opt.sf2_file,
         opt.prog_number,
         &opt.startup_sf2_file,
         &opt.startup_midi_file,
+        opt.volume,
     );
+    let mut control = opt.control_socket.as_deref().and_then(|path| {
+        control::Control::start(path)
+            .map_err(|e| warn!("No control socket at {}: {}", path, e))
+            .ok()
+    });
+    let mut live = control::Live {
+        program: opt.prog_number,
+        transpose: opt.transpose,
+        volume: opt.volume,
+        soundfont: opt.sf2_file.clone(),
+        ..Default::default()
+    };
     #[cfg(feature = "midi")]
     let mut midi_out = midi::MidiOut::new(&opt.midi_out, {
         #[cfg(feature = "ble")]
@@ -187,6 +207,40 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         #[cfg(feature = "midi")]
         midi_out.poll();
+
+        if let Some(control) = control.as_mut() {
+            for c in control.commands() {
+                match c {
+                    control::Cmd::Program(p) => cmd.set_program(p),
+                    control::Cmd::Transpose(t) => {
+                        notemap.transpose = t;
+                        info!("Set transpose to {}", t);
+                    }
+                    control::Cmd::Volume(v) => {
+                        synth::set_volume(&synth, v);
+                        live.volume = v;
+                    }
+                    control::Cmd::Soundfont(path, program) => {
+                        let program = program.unwrap_or(cmd.program());
+                        info!("Loading sound font {}", path);
+                        if let Some(id) =
+                            synth::switch_soundfont(&synth, soundfont_id, &path, program)
+                        {
+                            soundfont_id = Some(id);
+                            live.soundfont = path;
+                            cmd.reload_programs();
+                            cmd.set_program(program);
+                        }
+                    }
+                }
+            }
+            live.keys = keys;
+            live.breath = vol;
+            live.note = if last_note > 0 { Some(last_note) } else { None };
+            live.program = cmd.program();
+            live.transpose = notemap.transpose;
+            control.publish(&live);
+        }
 
         if notemap.is_recording() {
             notemap.record(keys, pressure);
