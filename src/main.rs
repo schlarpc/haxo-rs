@@ -22,6 +22,7 @@ mod midinotes;
 mod notemap;
 mod pressure;
 mod synth;
+mod ticks;
 mod transpose;
 
 use crate::synth::beep;
@@ -107,8 +108,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     const NEG_PRESS_INIT_VAL: u32 = NEG_PRESS_COUNTDOWN_MS * 1000 / TICK_USECS;
     let mut neg_pressure_countdown: u32 = NEG_PRESS_INIT_VAL;
     let mut last_vol: i32 = 0;
+    let mut tick_stats = ticks::TickStats::new(Duration::from_micros(TICK_USECS as u64));
     loop {
+        tick_stats.idle();
         tick.recv().unwrap();
+        tick_stats.wake();
         #[cfg(feature = "instrumentation")]
         busy_pin.set_high();
 
