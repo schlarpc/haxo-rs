@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use alsa::pcm::{Access, Format, HwParams, PCM};
+use alsa::pcm::{Access, Format, HwParams, State, PCM};
 use alsa::{Direction, ValueOr};
 use clap::Parser;
 use haxo_control::AudioFormat;
@@ -163,11 +163,10 @@ impl Stats {
 }
 
 fn run(args: &Args) -> Result<(), String> {
-    // The device first: the USB gadget refuses audio while no host
-    // records, and the tap needn't be bothered (a listener coming and going
-    // every second) until it would play. The gadget takes writes; it's
-    // starting that fails (EIO). So: a period of silence, a start, and a
-    // drop back to prepared for the real thing.
+    // The device first, kept open while it isn't taking audio: the USB
+    // gadget while no host records, PipeWire while no speaker is
+    // connected. The tap needn't be bothered (a listener coming and going
+    // every second) until there's somewhere to play.
     let pcm = open(args, args.rate).map_err(|e| format!("ALSA {}: {}", args.device, e))?;
     let (buffer, period) = pcm
         .get_params()
@@ -177,20 +176,22 @@ fn run(args: &Args) -> Result<(), String> {
     let channels = args.channels as usize;
     let mut announced = false;
     let io = pcm.io_i16().map_err(|e| e.to_string())?;
-    let probe = io
-        .writei(&vec![0i16; period * channels])
-        .and_then(|_| pcm.start())
-        .and_then(|_| pcm.drop())
-        .and_then(|_| pcm.prepare());
-    if let Err(e) = probe {
-        return Err(if e.errno() as i32 == libc_eio() {
-            format!(
-                "{} isn't taking audio (nobody recording from it?); waiting",
-                args.device
-            )
-        } else {
-            format!("ALSA {}: {}", args.device, e)
-        });
+    let mut waiting = false;
+    loop {
+        match taking(&pcm, &io, period, channels, buffer, args.rate) {
+            Ok(true) => break,
+            Ok(false) => {
+                if !waiting {
+                    info!(
+                        "{} isn't taking audio (nobody recording from it?); waiting",
+                        args.device
+                    );
+                    waiting = true;
+                }
+                thread::sleep(Duration::from_secs(1));
+            }
+            Err(e) => return Err(format!("ALSA {}: {}", args.device, e)),
+        }
     }
     let (mut tap, format) =
         connect(&args.tap).map_err(|e| format!("tap {}: {}", args.tap.display(), e))?;
@@ -339,7 +340,50 @@ fn run(args: &Args) -> Result<(), String> {
     }
 }
 
-// EIO, without a libc dependency for one number.
+/// Whether the device consumes audio: a period of silence, started, and a
+/// look a few periods later at whether any of it was played. The idle USB
+/// gadget takes the write and the start, and then never moves (a write
+/// that waits on it fails, EIO); PipeWire with no speaker blocks here until
+/// one connects. Leaves the device prepared for the real thing.
+fn taking(
+    pcm: &PCM,
+    io: &alsa::pcm::IO<i16>,
+    period: usize,
+    channels: usize,
+    buffer: usize,
+    rate: u32,
+) -> alsa::Result<bool> {
+    pcm.drop()?;
+    pcm.prepare()?;
+    let started = io
+        .writei(&vec![0i16; period * channels])
+        .and_then(|_| match pcm.state() {
+            State::Running => Ok(()),
+            _ => pcm.start(),
+        });
+    let moved = match started {
+        Err(e) if e.errno() as i32 == libc_eio() => false,
+        Err(e) => return Err(e),
+        Ok(()) => {
+            thread::sleep(Duration::from_secs_f64(3.0 * period as f64 / rate as f64));
+            match pcm.avail_update() {
+                Ok(avail) => avail as usize > buffer - period,
+                // Played it all and ran dry: it moves.
+                Err(e) if e.errno() as i32 == libc_epipe() => true,
+                Err(e) if e.errno() as i32 == libc_eio() => false,
+                Err(e) => return Err(e),
+            }
+        }
+    };
+    pcm.drop()?;
+    pcm.prepare()?;
+    Ok(moved)
+}
+
+// EIO and EPIPE, without a libc dependency for two numbers.
 fn libc_eio() -> i32 {
     5
+}
+fn libc_epipe() -> i32 {
+    32
 }
