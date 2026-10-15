@@ -75,7 +75,10 @@ in
 
   # Bluetooth: PipeWire's ALSA plugin ("pipewire") for the bridge to play
   # into, as the user PipeWire runs as. WirePlumber links it to the
-  # connected speaker; with none, the stream waits.
+  # connected speaker; with none, the stream lingers (node.linger) until
+  # one connects. Without that, WirePlumber fails the stream (ENOENT) and
+  # the bridge reopened it every second: a client and node built and torn
+  # down each time, which kept WirePlumber busy at ~10% CPU while idle.
   services.pipewire.alsa.enable = true;
   users.users.haxophone.extraGroups = [ "haxo" ];
   systemd.user.services.haxo-bt-audio = {
@@ -94,6 +97,7 @@ in
         "RUST_LOG=info"
         # PipeWire's own buffering for this stream: 256 frames.
         "PIPEWIRE_LATENCY=256/48000"
+        "PIPEWIRE_PROPS={ node.linger = true }"
       ];
     };
   };
