@@ -5,7 +5,7 @@
 // fluidsynth's audio thread (realtime, feeding the in-ear jack) pushes each
 // period into a wait-free ring and never waits: when the ring is full the
 // period is dropped. This thread, at normal priority, drains the ring to
-// the one connected client every few milliseconds. It keeps no backlog:
+// every connected client every few milliseconds. It keeps no backlog:
 // what a slow client can't take is dropped, and a delay in this thread is
 // caught up by skipping, so listeners hear the instrument late by
 // milliseconds, not by however far behind they fell.
@@ -27,6 +27,39 @@ const RING_MS: usize = 250;
 
 pub type Producer = rtrb::Producer<i16>;
 
+// Listeners at once: the web UI, the USB and Bluetooth bridges, and room
+// to spare. Each costs this thread a copy per poll.
+const MAX_CLIENTS: usize = 8;
+
+struct Client {
+    stream: UnixStream,
+    // Bytes a short write left behind: sent before anything new, so the
+    // stream stays aligned.
+    pending: Vec<u8>,
+}
+
+impl Client {
+    // Send what this poll read; false when the listener is gone. New audio
+    // waits for an old remainder; when that can't go, the new is dropped.
+    fn send(&mut self, bytes: &[u8]) -> bool {
+        if !self.pending.is_empty() {
+            match self.stream.write(&self.pending) {
+                Ok(n) => drop(self.pending.drain(..n)),
+                Err(e) if e.kind() == ErrorKind::WouldBlock => {}
+                Err(_) => return false,
+            }
+        }
+        if self.pending.is_empty() && !bytes.is_empty() {
+            match self.stream.write(bytes) {
+                Ok(n) => self.pending.extend_from_slice(&bytes[n..]),
+                Err(e) if e.kind() == ErrorKind::WouldBlock => {}
+                Err(_) => return false,
+            }
+        }
+        true
+    }
+}
+
 /// The ring between the audio thread and the tap thread, for `rate`.
 pub fn ring(rate: u32) -> (Producer, rtrb::Consumer<i16>) {
     rtrb::RingBuffer::new(rate as usize * RING_MS / 1000)
@@ -45,8 +78,9 @@ pub fn push(producer: &mut Producer, left: &[f32], right: &[f32]) {
     }));
 }
 
-/// Serve the ring's audio on `path` to one client at a time (a new client
-/// takes over). Start it before the main loop turns realtime.
+/// Serve the ring's audio on `path` to every client (up to MAX_CLIENTS),
+/// each on its own: one that falls behind loses audio, the others don't.
+/// Start it before the main loop turns realtime.
 pub fn serve(
     path: &str,
     mut ring: rtrb::Consumer<i16>,
@@ -63,20 +97,24 @@ pub fn serve(
     thread::Builder::new()
         .name("audio-tap".into())
         .spawn(move || {
-            let mut client: Option<UnixStream> = None;
-            // Bytes of a sample a short write left behind: sent before
-            // anything new, so the stream stays aligned.
-            let mut pending: Vec<u8> = Vec::new();
+            let mut clients: Vec<Client> = Vec::new();
             let mut bytes: Vec<u8> = Vec::new();
             loop {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        if stream.write_all(header.as_bytes()).is_ok()
+                        if clients.len() >= MAX_CLIENTS {
+                            warn!(
+                                "Audio tap: {} listeners already, refusing another",
+                                MAX_CLIENTS
+                            );
+                        } else if stream.write_all(header.as_bytes()).is_ok()
                             && stream.set_nonblocking(true).is_ok()
                         {
-                            info!("Audio tap: listener connected");
-                            client = Some(stream);
-                            pending.clear();
+                            clients.push(Client {
+                                stream,
+                                pending: Vec::new(),
+                            });
+                            info!("Audio tap: listener connected ({} now)", clients.len());
                         }
                     }
                     Err(e) if e.kind() == ErrorKind::WouldBlock => {}
@@ -100,32 +138,51 @@ pub fn serve(
                     c.commit_all();
                 }
 
-                if let Some(stream) = client.as_mut() {
-                    let mut gone = false;
-                    // The remainder of a short write first, then new audio
-                    // only once that's gone; otherwise the new is dropped.
-                    if !pending.is_empty() {
-                        match stream.write(&pending) {
-                            Ok(n) => drop(pending.drain(..n)),
-                            Err(e) if e.kind() == ErrorKind::WouldBlock => {}
-                            Err(_) => gone = true,
-                        }
-                    }
-                    if !gone && pending.is_empty() && !bytes.is_empty() {
-                        match stream.write(&bytes) {
-                            Ok(n) => pending.extend_from_slice(&bytes[n..]),
-                            Err(e) if e.kind() == ErrorKind::WouldBlock => {}
-                            Err(_) => gone = true,
-                        }
-                    }
-                    if gone {
-                        info!("Audio tap: listener gone");
-                        client = None;
-                        pending.clear();
-                    }
+                let before = clients.len();
+                clients.retain_mut(|c| c.send(&bytes));
+                if clients.len() < before {
+                    info!("Audio tap: listener gone ({} now)", clients.len());
                 }
                 thread::sleep(POLL);
             }
         })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Read};
+
+    #[test]
+    fn every_listener_gets_everything() {
+        let dir = std::env::temp_dir().join(format!("haxo-tap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tap").to_string_lossy().to_string();
+        let (mut producer, consumer) = ring(48_000);
+        serve(&path, consumer, AudioFormat::s16le(48_000, 1)).unwrap();
+        let listeners: Vec<_> = (0..3)
+            .map(|_| {
+                let s = UnixStream::connect(&path).unwrap();
+                s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                BufReader::new(s)
+            })
+            .collect();
+        // Let the tap thread accept them all before there's audio.
+        thread::sleep(POLL * 4);
+        let left: Vec<f32> = (0..480).map(|i| (i as f32 / 480.0) - 0.5).collect();
+        push(&mut producer, &left, &left);
+        for mut l in listeners {
+            let mut header = String::new();
+            l.read_line(&mut header).unwrap();
+            let f: AudioFormat = serde_json::from_str(&header).unwrap();
+            assert_eq!(f.rate, 48_000);
+            let mut pcm = vec![0u8; 480 * 2];
+            l.read_exact(&mut pcm).unwrap();
+            let first = i16::from_le_bytes([pcm[0], pcm[1]]);
+            let last = i16::from_le_bytes([pcm[958], pcm[959]]);
+            assert!(first < -16000 && last > 16000, "{} {}", first, last);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
