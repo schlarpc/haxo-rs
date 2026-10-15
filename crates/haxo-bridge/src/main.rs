@@ -163,9 +163,11 @@ impl Stats {
 }
 
 fn run(args: &Args) -> Result<(), String> {
-    // The device first, with a little silence: the USB gadget refuses
-    // audio while no host records, and the tap needn't be bothered (a
-    // listener coming and going every second) until it would play.
+    // The device first: the USB gadget refuses audio while no host
+    // records, and the tap needn't be bothered (a listener coming and going
+    // every second) until it would play. The gadget takes writes; it's
+    // starting that fails (EIO). So: a period of silence, a start, and a
+    // drop back to prepared for the real thing.
     let pcm = open(args, args.rate).map_err(|e| format!("ALSA {}: {}", args.device, e))?;
     let (buffer, period) = pcm
         .get_params()
@@ -175,7 +177,12 @@ fn run(args: &Args) -> Result<(), String> {
     let channels = args.channels as usize;
     let mut announced = false;
     let io = pcm.io_i16().map_err(|e| e.to_string())?;
-    if let Err(e) = io.writei(&vec![0i16; period * channels]) {
+    let probe = io
+        .writei(&vec![0i16; period * channels])
+        .and_then(|_| pcm.start())
+        .and_then(|_| pcm.drop())
+        .and_then(|_| pcm.prepare());
+    if let Err(e) = probe {
         return Err(if e.errno() as i32 == libc_eio() {
             format!(
                 "{} isn't taking audio (nobody recording from it?); waiting",
