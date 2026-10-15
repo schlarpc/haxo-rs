@@ -53,6 +53,10 @@ struct Opt {
     #[cfg(feature = "ble")]
     #[structopt(long)]
     ble_midi: Option<String>,
+    /// The rate the synth renders and the card plays at, in Hz. 48000 is
+    /// what Bluetooth and USB audio run at, and what ALSA's dmix defaults to.
+    #[structopt(long, default_value = "48000")]
+    sample_rate: u32,
     /// Volume, 0-100 (the synth's gain; 100 is a gain of 1)
     #[structopt(long, default_value = "100")]
     volume: i32,
@@ -103,11 +107,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let opt = Opt::from_args();
     debug!("{:?}", opt);
 
-    // The tap's ring is sized for the default rate; the real one comes from
-    // the settings once they exist.
     let (tap_in, tap_out) = match opt.audio_socket {
         Some(_) => {
-            let (p, c) = tap::ring(48_000);
+            let (p, c) = tap::ring(opt.sample_rate);
             (Some(p), Some(c))
         }
         None => (None, None),
@@ -118,6 +120,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &opt.startup_sf2_file,
         &opt.startup_midi_file,
         opt.volume,
+        opt.sample_rate,
         tap_in,
     );
     if let (Some(path), Some(ring)) = (opt.audio_socket.as_deref(), tap_out) {

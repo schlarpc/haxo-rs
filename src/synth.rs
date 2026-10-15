@@ -207,6 +207,7 @@ pub fn try_init(
     startup_sf2_file: &str,
     startup_midi_file: &str,
     volume: i32,
+    sample_rate: u32,
     tap: Option<crate::tap::Producer>,
 ) -> (synth::Synth, settings::Settings, Audio, Option<u32>) {
     let mut settings = settings::Settings::new();
@@ -220,6 +221,12 @@ pub fn try_init(
     if settings.setint("audio.period-size", 64) {
         warn!("Setting audio.period-size in fluidsynth failed");
     }
+    // The ALSA driver opens the card at the synth's rate. (The binding's
+    // set functions return true on failure.)
+    if settings.setnum("synth.sample-rate", sample_rate as f64) {
+        warn!("Setting synth.sample-rate to {} failed", sample_rate);
+    }
+    info!("Rendering at {} Hz", self::sample_rate(&settings));
 
     // The card can still be probing when we start at boot; wait for it
     // rather than exit and lean on the service manager's restarts.
