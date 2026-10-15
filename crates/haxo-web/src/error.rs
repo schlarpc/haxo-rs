@@ -9,6 +9,9 @@ use log::warn;
 pub struct Error {
     pub status: StatusCode,
     pub message: String,
+    /// What the page should ask the person to confirm before trying again
+    /// with the same request, confirmed.
+    pub confirm: Option<&'static str>,
 }
 
 impl Error {
@@ -16,6 +19,14 @@ impl Error {
         Error {
             status,
             message: message.into(),
+            confirm: None,
+        }
+    }
+    /// 409: the request needs confirming first (see `confirm`).
+    pub fn needs_confirming(what: &'static str, message: impl Into<String>) -> Self {
+        Error {
+            confirm: Some(what),
+            ..Error::new(StatusCode::CONFLICT, message)
         }
     }
     pub fn bad_request(message: impl Into<String>) -> Self {
@@ -36,7 +47,10 @@ impl IntoResponse for Error {
         }
         (
             self.status,
-            Json(serde_json::json!({ "error": self.message })),
+            Json(match self.confirm {
+                Some(c) => serde_json::json!({ "error": self.message, "confirm": c }),
+                None => serde_json::json!({ "error": self.message }),
+            }),
         )
             .into_response()
     }

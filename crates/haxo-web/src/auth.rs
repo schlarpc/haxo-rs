@@ -50,6 +50,20 @@ impl Auth {
         }
     }
 
+    /// Whether this connection rides on Wi-Fi: neither the USB link nor this
+    /// machine itself. Changing Wi-Fi can cut it off.
+    pub fn over_wifi(&self, peer: SocketAddr) -> bool {
+        let ip = match peer {
+            SocketAddr::V4(v4) => std::net::IpAddr::V4(*v4.ip()),
+            SocketAddr::V6(v6) => v6
+                .ip()
+                .to_ipv4_mapped()
+                .map(std::net::IpAddr::V4)
+                .unwrap_or(std::net::IpAddr::V6(*v6.ip())),
+        };
+        !self.trusted(peer) && !ip.is_loopback()
+    }
+
     fn has_session(&self, headers: &HeaderMap) -> bool {
         let Some(token) = cookie(headers, COOKIE) else {
             return false;
@@ -118,16 +132,6 @@ fn on_link(interface: &str, peer: Ipv4Addr) -> bool {
     })
 }
 
-// Constant time in the length of `a`.
-fn same(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    let mut diff = (a.len() != b.len()) as u8;
-    for (i, x) in a.iter().enumerate() {
-        diff |= x ^ b.get(i).copied().unwrap_or(0);
-    }
-    diff == 0
-}
-
 /// Middleware for everything under /api but the session calls.
 pub async fn require(
     State(app): State<crate::State>,
@@ -149,11 +153,14 @@ pub async fn session(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>> {
     let trusted = app.auth.trusted(peer);
-    let password_set = settings::show(&app.args).await?.web.password.is_some();
+    let password_set = settings::show(&app.args).await?.web.password_set;
     Ok(Json(serde_json::json!({
         "trusted": trusted,
         "authenticated": trusted || app.auth.has_session(&headers),
         "password_set": password_set,
+        // How this page reaches the board: "wifi" can be cut off by Wi-Fi
+        // changes.
+        "via": if app.auth.over_wifi(peer) { "wifi" } else if trusted { "usb" } else { "other" },
     })))
 }
 
@@ -168,14 +175,15 @@ pub async fn login(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(body): Json<Login>,
 ) -> Result<Response> {
-    let Some(password) = settings::show(&app.args).await?.web.password else {
+    let (set, matches) = settings::check_password(&app.args, &body.password).await?;
+    if !set {
         return Err(Error::new(
             StatusCode::FORBIDDEN,
             "Web access over Wi-Fi is off: set a password under [web] in haxophone.toml, \
              or connect over the USB cable.",
         ));
-    };
-    if !same(&body.password, &password) {
+    }
+    if !matches {
         // Slow down guessing.
         tokio::time::sleep(Duration::from_secs(1)).await;
         info!("Failed login from {}", peer.ip());
@@ -202,14 +210,6 @@ pub async fn login(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn compares_passwords() {
-        assert!(same("hunter22", "hunter22"));
-        assert!(!same("hunter22", "hunter2"));
-        assert!(!same("hunter2", "hunter22"));
-        assert!(!same("", "x"));
-    }
 
     #[test]
     fn reads_cookies() {

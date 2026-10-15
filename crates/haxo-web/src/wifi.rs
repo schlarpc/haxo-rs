@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::extract::{Path as UrlPath, State};
+use std::net::SocketAddr;
+
+use axum::extract::{ConnectInfo, Path as UrlPath, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use log::info;
@@ -266,6 +268,27 @@ pub struct Connect {
     psk: Option<String>,
     #[serde(default)]
     save: bool,
+    /// The person was told this may cut off their connection to the board.
+    #[serde(default)]
+    disconnect_ok: bool,
+}
+
+// Joining another network, or forgetting the one in use, drops the board's
+// Wi-Fi link, and with it a page that came in over Wi-Fi. Refuse until the
+// person has said they know; over the USB cable there's nothing to lose.
+fn guard(app: &crate::App, peer: SocketAddr, confirmed: bool, what: &str) -> Result<()> {
+    if confirmed || !app.auth.over_wifi(peer) {
+        return Ok(());
+    }
+    Err(Error::needs_confirming(
+        "disconnect",
+        format!(
+            "You're connected to the haxophone over Wi-Fi. {} will drop this \
+             connection, and the page may not come back until you join the \
+             same network as the haxophone (or connect the USB cable).",
+            what
+        ),
+    ))
 }
 
 fn connect_error(ssid: &str, e: zbus::Error) -> Error {
@@ -288,6 +311,7 @@ fn connect_error(ssid: &str, e: zbus::Error) -> Error {
 /// `POST /api/wifi/connect` `{ ssid, psk?, save }`
 pub async fn connect(
     State(app): State<crate::State>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(body): Json<Connect>,
 ) -> Result<Json<Current>> {
     if let Some(psk) = &body.psk {
@@ -318,6 +342,15 @@ pub async fn connect(
             body.ssid
         )));
     }
+    let joined = current(&app).await.ok().flatten().map(|c| c.ssid);
+    if joined.as_deref() != Some(body.ssid.as_str()) {
+        guard(
+            &app,
+            peer,
+            body.disconnect_ok,
+            &format!("Joining {}", body.ssid),
+        )?;
+    }
     if body.save {
         settings::wifi_add(&app.args, &body.ssid, body.psk.as_deref()).await?;
         settings::reapply(&app.args).await?;
@@ -342,10 +375,22 @@ pub async fn connect(
 }
 
 /// `DELETE /api/wifi/saved/{ssid}`
+#[derive(Deserialize)]
+pub struct ForgetQuery {
+    #[serde(default)]
+    disconnect_ok: bool,
+}
+
 pub async fn forget(
     State(app): State<crate::State>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     UrlPath(ssid): UrlPath<String>,
+    Query(q): Query<ForgetQuery>,
 ) -> Result<axum::http::StatusCode> {
+    let joined = current(&app).await.ok().flatten().map(|c| c.ssid);
+    if joined.as_deref() == Some(ssid.as_str()) {
+        guard(&app, peer, q.disconnect_ok, &format!("Forgetting {}", ssid))?;
+    }
     settings::wifi_remove(&app.args, &ssid).await?;
     settings::reapply(&app.args).await?;
     Ok(StatusCode::NO_CONTENT)

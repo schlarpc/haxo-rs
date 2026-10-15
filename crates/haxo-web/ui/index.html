@@ -428,6 +428,16 @@ dialog.login .err { color: var(--bad); min-height: 1.2em; margin: 0; }
 </main>
 
 <div class="toast" id="toast" role="status" hidden></div>
+<dialog class="login" id="confirm" aria-labelledby="confirm-title">
+  <form method="dialog" id="confirm-form">
+    <h2 id="confirm-title" style="margin:0">Are you sure?</h2>
+    <p id="confirm-text" style="margin:0"></p>
+    <div class="row" style="justify-content:flex-end;gap:8px">
+      <button class="btn" value="cancel" id="confirm-cancel">Cancel</button>
+      <button class="btn primary danger" value="ok" id="confirm-ok">Continue</button>
+    </div>
+  </form>
+</dialog>
 <dialog class="login" id="login" aria-labelledby="login-title">
   <form method="dialog" id="login-form">
     <h2 id="login-title" style="margin:0">Log in</h2>
@@ -814,7 +824,12 @@ function createRealApi() {
       const text = await res.text();
       let data = null;
       try { data = text ? JSON.parse(text) : null; } catch { data = null; }
-      if (!res.ok) throw new Error((data && data.error) || `${res.status} ${res.statusText}`);
+      if (!res.ok) {
+        const err = new Error((data && data.error) || `${res.status} ${res.statusText}`);
+        err.status = res.status;
+        err.confirm = data && data.confirm;
+        throw err;
+      }
       return data;
     }
   }
@@ -838,8 +853,8 @@ function createRealApi() {
     wifi: {
       status: () => call("GET", "/wifi"),
       scan: () => call("POST", "/wifi/scan"),
-      connect: (ssid, psk, save) => call("POST", "/wifi/connect", { ssid, psk: psk || undefined, save }),
-      forget: (ssid) => call("DELETE", "/wifi/saved/" + enc(ssid)),
+      connect: (ssid, psk, save, disconnectOk) => call("POST", "/wifi/connect", { ssid, psk: psk || undefined, save, disconnect_ok: !!disconnectOk }),
+      forget: (ssid, disconnectOk) => call("DELETE", "/wifi/saved/" + enc(ssid) + (disconnectOk ? "?disconnect_ok=true" : "")),
     },
     bluetooth: {
       status: () => call("GET", "/bluetooth"),
@@ -890,6 +905,30 @@ function login() {
 }
 
 let api = createMockApi();
+// Ask before something the person might regret; resolves true to go on.
+function confirmDialog(title, text, okLabel) {
+  return new Promise((resolve) => {
+    const dlg = $("#confirm");
+    $("#confirm-title").textContent = title;
+    $("#confirm-text").textContent = text;
+    $("#confirm-ok").textContent = okLabel;
+    dlg.onclose = () => resolve(dlg.returnValue === "ok");
+    dlg.returnValue = "";
+    dlg.showModal();
+    $("#confirm-cancel").focus();
+  });
+}
+// Run `fn(confirmed)`; when the board answers that it needs confirming
+// (409), ask, and run it again confirmed.
+async function withConfirm(fn, okLabel) {
+  try {
+    return await fn(false);
+  } catch (err) {
+    if (err.status !== 409 || !err.confirm) throw err;
+    if (!(await confirmDialog("This will cut you off", err.message, okLabel))) return undefined;
+    return await fn(true);
+  }
+}
 // Show an action's error instead of leaving the page stuck.
 async function attempt(fn) {
   try { return await fn(); } catch (err) { toast(err.message); return undefined; }
@@ -1251,7 +1290,8 @@ async function renderWifi() {
       el("div", { class: "actions" },
         el("button", { class: "btn small danger", onclick: async (e) => {
           e.target.disabled = true;
-          await api.wifi.forget(s.ssid);
+          const done = await attempt(() => withConfirm((ok) => api.wifi.forget(s.ssid, ok), "Forget anyway"));
+          if (done === undefined) { e.target.disabled = false; return; }
           toast(`Forgot ${s.ssid}`);
           renderWifi();
         } }, "Forget")),
@@ -1283,7 +1323,8 @@ function renderNearby() {
         try {
           const psk = n.security === "open" ? null : form.querySelector("#" + pskId).value;
           const save = form.querySelector("#" + saveId).checked;
-          await api.wifi.connect(n.ssid, psk, save);
+          const joined = await withConfirm((ok) => api.wifi.connect(n.ssid, psk, save, ok), "Join anyway");
+          if (joined === undefined) return;
           wifiUi.open = null;
           toast(`Connected to ${n.ssid}` + (save ? " and saved" : ""));
           renderWifi();

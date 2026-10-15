@@ -1,11 +1,12 @@
-// The settings file on the card, through `haxophone-config`: it is the one
-// place that knows the format, and it edits the file without touching the
-// rest (comments, layout), so the file stays readable and editable by hand.
-use std::process::Stdio;
-
+// The settings file on the card, through `haxophone-config serve`: a root
+// helper behind a Unix socket (one JSON request per connection), the one
+// place that knows the format. It edits the file without touching the rest
+// (comments, layout), and the web password never leaves it. haxo-web
+// itself runs unprivileged and can't write the FAT partition.
 use serde::Deserialize;
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
+use serde_json::{json, Value};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::UnixStream;
 
 use crate::error::{Error, Result};
 use crate::Args;
@@ -32,71 +33,74 @@ pub struct Instrument {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct Web {
-    pub password: Option<String>,
+    #[serde(default)]
+    pub password_set: bool,
 }
 
-// Edits read the file, change it and write it back: two at once would lose
-// one of them, so they take turns.
+// Edits read the file, change it and write it back. The helper locks, but
+// a turn here also keeps them in the order they were asked for.
 static EDITING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-async fn run(args: &Args, cmd: &[&str], stdin: Option<&str>) -> Result<String> {
-    let _turn = EDITING.lock().await;
-    let mut c = Command::new(&args.haxophone_config);
-    c.args(cmd)
-        .arg("--config")
-        .arg(&args.config)
-        .stdin(if stdin.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = c
-        .spawn()
-        .map_err(|e| Error::internal(format!("running haxophone-config: {}", e)))?;
-    if let Some(input) = stdin {
-        let mut pipe = child.stdin.take().unwrap();
-        pipe.write_all(input.as_bytes()).await?;
-        pipe.write_all(b"\n").await?;
-    }
-    let out = child.wait_with_output().await?;
-    if !out.status.success() {
-        let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(Error::internal(format!(
+async fn request(args: &Args, req: Value) -> Result<Value> {
+    let unavailable = |e: std::io::Error| {
+        Error::internal(format!(
+            "The settings file can't be reached ({}): {}",
+            args.settings_socket.display(),
+            e
+        ))
+    };
+    let mut stream = UnixStream::connect(&args.settings_socket)
+        .await
+        .map_err(unavailable)?;
+    let mut line = req.to_string();
+    line.push('\n');
+    stream
+        .write_all(line.as_bytes())
+        .await
+        .map_err(unavailable)?;
+    let mut reply = String::new();
+    BufReader::new(stream)
+        .read_line(&mut reply)
+        .await
+        .map_err(unavailable)?;
+    let v: Value = serde_json::from_str(&reply)
+        .map_err(|e| Error::internal(format!("The settings helper answered {:?}: {}", reply, e)))?;
+    if v["ok"] == Value::Bool(true) {
+        Ok(v["result"].clone())
+    } else {
+        Err(Error::internal(format!(
             "The settings file couldn't be changed: {}",
-            if msg.is_empty() {
-                "haxophone-config failed"
-            } else {
-                &msg
-            }
-        )));
+            v["error"].as_str().unwrap_or("unknown error")
+        )))
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+async fn edit(args: &Args, req: Value) -> Result<()> {
+    let _turn = EDITING.lock().await;
+    request(args, req).await.map(|_| ())
 }
 
 /// The parsed settings file. A missing or broken file reads as empty.
 pub async fn show(args: &Args) -> Result<Shown> {
-    let mut c = Command::new(&args.haxophone_config);
-    c.arg("show").arg("--config").arg(&args.config);
-    let out = c
-        .output()
-        .await
-        .map_err(|e| Error::internal(format!("running haxophone-config: {}", e)))?;
-    Ok(serde_json::from_slice(&out.stdout).unwrap_or_default())
+    let v = request(args, json!({ "cmd": "show" })).await?;
+    Ok(serde_json::from_value(v).unwrap_or_default())
+}
+
+/// Whether a web password is set, and whether `given` is it.
+pub async fn check_password(args: &Args, given: &str) -> Result<(bool, bool)> {
+    let v = request(args, json!({ "cmd": "check-password", "password": given })).await?;
+    Ok((
+        v["set"] == Value::Bool(true),
+        v["match"] == Value::Bool(true),
+    ))
 }
 
 pub async fn wifi_add(args: &Args, ssid: &str, psk: Option<&str>) -> Result<()> {
-    match psk {
-        Some(psk) => run(args, &["wifi-add", ssid, "--psk-stdin"], Some(psk)).await?,
-        None => run(args, &["wifi-add", ssid], None).await?,
-    };
-    Ok(())
+    edit(args, json!({ "cmd": "wifi-add", "ssid": ssid, "psk": psk })).await
 }
 
 pub async fn wifi_remove(args: &Args, ssid: &str) -> Result<()> {
-    run(args, &["wifi-remove", ssid], None).await?;
-    Ok(())
+    edit(args, json!({ "cmd": "wifi-remove", "ssid": ssid })).await
 }
 
 #[derive(Default)]
@@ -108,38 +112,23 @@ pub struct InstrumentChange {
 }
 
 pub async fn set_instrument(args: &Args, c: &InstrumentChange) -> Result<()> {
-    let mut a: Vec<String> = vec!["set-instrument".into()];
-    if let Some(s) = &c.soundfont {
-        a.extend(["--soundfont".into(), s.clone()]);
-    }
-    for (flag, v) in [
-        ("--program", c.program),
-        ("--transpose", c.transpose),
-        ("--volume", c.volume),
-    ] {
-        if let Some(v) = v {
-            a.extend([flag.into(), v.to_string()]);
-        }
-    }
-    if a.len() == 1 {
+    if c.soundfont.is_none() && c.program.is_none() && c.transpose.is_none() && c.volume.is_none() {
         return Ok(());
     }
-    let refs: Vec<&str> = a.iter().map(String::as_str).collect();
-    run(args, &refs, None).await?;
-    Ok(())
+    edit(
+        args,
+        json!({
+            "cmd": "set-instrument",
+            "soundfont": c.soundfont,
+            "program": c.program,
+            "transpose": c.transpose,
+            "volume": c.volume,
+        }),
+    )
+    .await
 }
 
 /// Apply the settings file again (iwd's network files and the rest).
 pub async fn reapply(args: &Args) -> Result<()> {
-    let out = Command::new("systemctl")
-        .args(["restart", &args.config_unit])
-        .output()
-        .await?;
-    if !out.status.success() {
-        return Err(Error::internal(format!(
-            "Applying the settings failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )));
-    }
-    Ok(())
+    edit(args, json!({ "cmd": "apply" })).await
 }

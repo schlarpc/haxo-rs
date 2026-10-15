@@ -32,15 +32,9 @@ pub struct Args {
     /// haxo001's control socket.
     #[arg(long, default_value = "/run/haxo/control.sock")]
     pub control_socket: PathBuf,
-    /// The settings file.
-    #[arg(long, default_value = "/boot/config/haxophone.toml")]
-    pub config: PathBuf,
-    /// The settings tool, which edits that file.
-    #[arg(long, default_value = "haxophone-config")]
-    pub haxophone_config: PathBuf,
-    /// The systemd unit that applies the settings file.
-    #[arg(long, default_value = "haxophone-config.service")]
-    pub config_unit: String,
+    /// The settings helper's socket (`haxophone-config serve`).
+    #[arg(long, default_value = "/run/haxophone-config/settings.sock")]
+    pub settings_socket: PathBuf,
     /// Where uploaded soundfonts go (and the MTP storage).
     #[arg(long, default_value = "/var/lib/haxophone/files")]
     pub files_dir: PathBuf,
