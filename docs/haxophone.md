@@ -31,19 +31,22 @@ Roughly in order. Details are in the sections named.
    - Record what happened in "Layout", and drop its "untested" notes.
 2. **USB gadget stalls** under sustained bulk transfers ("Open issue"):
    reproduce over Wi-Fi with the kernel log live.
-3. **Bluetooth audio bench test** ("Bluetooth"): pair a receiver,
-   measure latency per codec and CPU next to haxo, listen for radio noise.
+3. **Bluetooth audio with a real speaker** ("Audio out"): the chain runs
+   and the board is source-only, but nothing has played through it yet.
+   Pair a speaker from the web UI, measure latency per codec and CPU next
+   to haxo, listen for radio noise.
 4. **haxo-rs patches** ("Patches to make"), each reproduced and measured
    on the board first ("Upstream issues"). What's left there needs someone
    playing (idle wake-up, BLE MIDI from a phone, the pressure spikes) or
    step 3 below.
 5. **Bluetooth MIDI** is in haxo-rs (193ea18, pairing b0a68fd); try it
    from a phone or a DAW.
-6. **Own render loop with the Bluetooth bridge** ("Outputs", build order
-   step 3).
-7. **USB audio out** (UAC2, "TODO: USB audio out"), and the **web UI**'s
-   remaining parts (docs/webui.md, "Open"): it is served by the board
-   since 2026-10-14; the audio tap waits for step 6.
+6. **Own render loop** ("Outputs"): mostly there. haxo renders through
+   fluidsynth's callback driver and taps it; haxo-bridge feeds USB audio
+   and Bluetooth ("Audio out"). Left: summing L+R into the jack's one
+   channel, and backing tracks.
+7. **The web UI**'s remaining parts (docs/webui.md, "Open"), and the
+   design brief handed to a design agent.
 
 ## Bootstrap (schlarpc-flake hosts/haxophone, 2026-10-12)
 
@@ -512,8 +515,9 @@ compiled):
 ## USB gadget (nixos/gadget.nix)
 
 configfs composite: NCM (usb0, same fixed MACs and 10.68.0.1 DHCP setup),
-ACM (ttyGS0 getty), MIDI (`f_midi`, ALSA id `haxophone`; hosts see a USB
-MIDI 1.0 device) and MTP (umtprd over FunctionFS, storage "Files" at
+UAC2 (USB audio out, see "Audio out"; replaced the ACM serial console on
+2026-10-15, whose getty now only starts in the g_cdc fallback), MIDI
+(`f_midi`, ALSA id `haxophone`; hosts see a USB MIDI 1.0 device) and MTP (umtprd over FunctionFS, storage "Files" at
 /var/lib/haxophone/files). umtprd is `Type=notify` and signals after
 writing its descriptors; `usb-gadget-bind` then binds the UDC and is PartOf
 umtprd, so restarting umtprd rebinds (tested: under a second, host
@@ -617,8 +621,11 @@ limit is 7 IN + 7 OUT.
 | NCM | 2 | 1 |
 | MIDI | 1 | 1 |
 | MTP (umtprd) | 2 | 1 |
-| ACM serial | 2 | 1 |
-| All four | 7 | 4 |
+| UAC2, playback only (since 2026-10-15) | 1 | 0 |
+| All four | 6 | 3 |
+
+Until 2026-10-15 the fourth was the ACM serial console (2 IN + 1 OUT),
+which took the last free IN endpoints.
 
 Verified on the board (2026-10-12, mainline 6.18): `hw_params` shows
 `num_dev_ep 7`, `dev_ep_dirs 0x0` (every endpoint number bidirectional) and
@@ -626,31 +633,45 @@ Verified on the board (2026-10-12, mainline 6.18): `hw_params` shows
 768 768 words) out of 4080 total. So 7 IN + 7 OUT holds, and all four
 functions fit.
 
-### TODO: USB audio out (UAC2), to the host as a sound card
-
-All 7 IN endpoints are taken, so this means dropping a function. ACM is the
-candidate (frees 2 IN, 1 OUT): the mini-UART console and SSH over NCM
-cover it.
+### USB audio out (UAC2), to the host as a sound card
 
 The configfs `uac2` function works on the stock kernel even though nixpkgs
 leaves `CONFIG_USB_CONFIGFS_F_UAC2` unset: `usb_f_uac2.ko` is built for the
-legacy `g_audio`, and configfs finds it by name. Verified 2026-10-13: modprobe
-plus `mkdir functions/uac2.t` in a scratch, unbound gadget shows the full
-attribute set. No kernel rebuild needed.
+legacy `g_audio`, and configfs finds it by name. Device-to-host only costs
+1 IN endpoint once the defaults are overridden (they enable capture, mute
+and volume controls and async feedback, 3 IN): `p_chmask=3 p_srate=48000
+p_ssize=2 c_chmask=0`, no mute or volume. On the Pi it is ALSA card
+`UAC2Gadget`; hosts see "Haxophone", a 48 kHz stereo input. See "Audio out".
 
-Device-to-host only costs 1 IN endpoint, but only if the defaults are
-overridden. In f_uac2, `p_` is the gadget's playback (IN, what the host
-records) and `c_` is host-to-gadget (OUT). The defaults enable both sides,
-mute and volume controls (an interrupt IN), and async feedback (another
-IN), so 3 IN. Set:
-`p_chmask=3 c_chmask=0 p_mute_present=0 p_volume_present=0 p_srate=48000`.
+## Audio out (nixos/audio-out.nix, 2026-10-15)
 
-On the Pi it appears as a second ALSA playback card. Feed it from the own
-render loop as one more tap, with the same non-blocking ring buffer and
-drift correction as the Bluetooth bridge: the host's USB clock is not the
-I2S clock (u_audio also offers a "Playback Pitch" control to trim the rate).
-This turns the haxophone into a USB audio + MIDI interface for a DAW.
-Measure latency and CPU before calling it done.
+haxo001 renders through fluidsynth's callback driver and pushes a mono
+copy of every period into a wait-free ring; a tap thread serves it on
+/run/haxo/audio.sock to every listener (up to 8), each dropping what it
+can't take. haxo-bridge (haxo-rs workspace) plays it into a device on
+another clock, keeping its FIFO plus the device's queue at 40 ms with
+rubato's `Slip` (a crossfaded one-frame slip now and then, steered by
+the buffering error): the web UI, USB audio (UAC2) and Bluetooth (through
+PipeWire's ALSA plugin, in the haxophone user's session) are listeners.
+
+- **USB audio, verified 2026-10-15 from bagel** (`arecord` on the
+  Haxophone card): the bridge plays exactly while the host records (the
+  gadget refuses writes with EIO otherwise, the waiting state), stays at
+  36 to 44 ms buffered with the ratio within a few hundred ppm, and
+  survives haxo restarting (back within a second). haxo's startup (the
+  soundfont load and mlockall) costs about 10 s of uneven delivery
+  (191 underruns filled with silence, 103 ms dropped), then clean. Runs
+  at SCHED_FIFO 10, below the instrument's threads. Bench-tested first on
+  bagel into snd-aloop: 34 s of a sine with no gap or discontinuity.
+- **Bluetooth audio, not yet heard.** The board offers the A2DP source
+  role only (WirePlumber `bluez5.roles`): with every role, bagel paired
+  as a source and streamed into the board. Pairing from the web UI's
+  scan and pair worked (bagel found, flagged as audio, paired over
+  BR/EDR), but bagel's desktop PipeWire registered no sink endpoint
+  (likely its seat monitoring, the session being inactive), so nothing
+  has played through it. Needs a real speaker.
+- The startup tune reaches listeners too: the tap starts before the
+  synth.
 
 ## Gadget decisions
 
