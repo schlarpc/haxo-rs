@@ -19,6 +19,7 @@ rand = "0.8.0"
 rppal = { version = "0.22.1", features = ["hal"] }
 gpiocdev = "0.8.0"
 libc = "0.2"
+rtrb = "0.4"
 serde_json = "1.0"
 static_assertions = "1.1.0"
 structopt = "0.3.22"

@@ -24,6 +24,7 @@ mod midinotes;
 mod notemap;
 mod pressure;
 mod synth;
+mod tap;
 mod ticks;
 mod transpose;
 
@@ -58,6 +59,10 @@ struct Opt {
     /// Unix socket for live state and settings (JSON lines); off when unset
     #[structopt(long)]
     control_socket: Option<String>,
+    /// Unix socket for a copy of the sound (raw PCM, see haxo-control);
+    /// off when unset
+    #[structopt(long)]
+    audio_socket: Option<String>,
     /// Seconds without breath or key changes before the audio output is
     /// closed (shutting the amp down) until the next one; 0 never closes it
     #[structopt(long, default_value = "0")]
@@ -98,13 +103,29 @@ fn main() -> Result<(), Box<dyn Error>> {
     let opt = Opt::from_args();
     debug!("{:?}", opt);
 
+    // The tap's ring is sized for the default rate; the real one comes from
+    // the settings once they exist.
+    let (tap_in, tap_out) = match opt.audio_socket {
+        Some(_) => {
+            let (p, c) = tap::ring(48_000);
+            (Some(p), Some(c))
+        }
+        None => (None, None),
+    };
     let (synth, settings, mut audio, mut soundfont_id) = synth::try_init(
         &opt.sf2_file,
         opt.prog_number,
         &opt.startup_sf2_file,
         &opt.startup_midi_file,
         opt.volume,
+        tap_in,
     );
+    if let (Some(path), Some(ring)) = (opt.audio_socket.as_deref(), tap_out) {
+        let format = haxo_control::AudioFormat::s16le(synth::sample_rate(&settings), 1);
+        if let Err(e) = tap::serve(path, ring, format) {
+            warn!("No audio tap at {}: {}", path, e);
+        }
+    }
     let mut control = opt.control_socket.as_deref().and_then(|path| {
         control::Control::start(path)
             .map_err(|e| warn!("No control socket at {}: {}", path, e))

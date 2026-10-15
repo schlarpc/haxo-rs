@@ -39,6 +39,32 @@ pub struct Set {
     pub soundfont: Option<String>,
 }
 
+/// The audio socket (`--audio-socket PATH`): this as one JSON line, then
+/// the instrument's sound as raw interleaved PCM, from when the client
+/// connects, for as long as it reads. A client that falls behind loses
+/// audio rather than delaying it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AudioFormat {
+    pub rate: u32,
+    pub channels: u16,
+    /// Always "s16le".
+    pub format: String,
+}
+
+impl AudioFormat {
+    pub fn s16le(rate: u32, channels: u16) -> Self {
+        AudioFormat {
+            rate,
+            channels,
+            format: "s16le".into(),
+        }
+    }
+
+    pub fn bytes_per_frame(&self) -> usize {
+        2 * self.channels as usize
+    }
+}
+
 pub const TRANSPOSE_RANGE: std::ops::RangeInclusive<i32> = -48..=48;
 
 impl Set {

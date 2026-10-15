@@ -17,17 +17,114 @@ extern "C" {
 // AudioDriver needs the synth mutably, which the main loop can't offer.
 pub struct Audio {
     driver: *mut std::ffi::c_void,
+    // What the driver's callback renders with; boxed so its address holds
+    // across closing and reopening.
+    render: Box<Render>,
 }
 
+struct Render {
+    synth: fluid_ptr,
+    tap: Option<crate::tap::Producer>,
+    // fluid_synth_process leaves reverb and chorus out of the dry output
+    // unless given buffers for them (fluidsynth's own driver path mixes
+    // them in). One stereo pair takes every effect channel, summed (the
+    // documented wrap-around), and is added to the output.
+    fx: [Vec<f32>; 2],
+}
+
+// Longer periods than this render without effects; ALSA's are 64 here.
+const MAX_PERIOD: usize = 8192;
+
+type AudioFunc = extern "C" fn(
+    data: *mut std::ffi::c_void,
+    len: i32,
+    nfx: i32,
+    fx: *mut *mut f32,
+    nout: i32,
+    out: *mut *mut f32,
+) -> i32;
+
 extern "C" {
-    fn new_fluid_audio_driver(settings: fluid_ptr, synth: fluid_ptr) -> fluid_ptr;
+    fn new_fluid_audio_driver2(settings: fluid_ptr, func: AudioFunc, data: fluid_ptr) -> fluid_ptr;
     fn delete_fluid_audio_driver(driver: fluid_ptr);
+    fn fluid_synth_process(
+        synth: fluid_ptr,
+        len: i32,
+        nfx: i32,
+        fx: *mut *mut f32,
+        nout: i32,
+        out: *mut *mut f32,
+    ) -> i32;
+}
+
+// fluidsynth's audio thread calls this for every period: render the synth
+// into the driver's buffers (what the jack plays), then hand a copy to the
+// tap. Nothing here allocates or waits.
+extern "C" fn render(
+    data: *mut std::ffi::c_void,
+    len: i32,
+    nfx: i32,
+    fx: *mut *mut f32,
+    nout: i32,
+    out: *mut *mut f32,
+) -> i32 {
+    let r = unsafe { &mut *(data as *mut Render) };
+    let n = len.max(0) as usize;
+    unsafe {
+        // fluid_synth_process mixes into the buffers: start from silence.
+        for (bufs, count) in [(out, nout), (fx, nfx)] {
+            for i in 0..count.max(0) as usize {
+                let b = *bufs.add(i);
+                if !b.is_null() {
+                    std::ptr::write_bytes(b, 0, n);
+                }
+            }
+        }
+    }
+    let result = if nfx == 0 && nout >= 2 && n <= MAX_PERIOD {
+        let [fl, fr] = &mut r.fx;
+        fl[..n].fill(0.0);
+        fr[..n].fill(0.0);
+        let mut ours = [fl.as_mut_ptr(), fr.as_mut_ptr()];
+        let result = unsafe { fluid_synth_process(r.synth, len, 2, ours.as_mut_ptr(), nout, out) };
+        let (left, right) = unsafe {
+            (
+                std::slice::from_raw_parts_mut(*out, n),
+                std::slice::from_raw_parts_mut(*out.add(1), n),
+            )
+        };
+        for i in 0..n {
+            left[i] += fl[i];
+            right[i] += fr[i];
+        }
+        result
+    } else {
+        unsafe { fluid_synth_process(r.synth, len, nfx, fx, nout, out) }
+    };
+    if let Some(tap) = r.tap.as_mut() {
+        if nout >= 2 {
+            let (left, right) = unsafe {
+                (
+                    std::slice::from_raw_parts(*out, n),
+                    std::slice::from_raw_parts(*out.add(1), n),
+                )
+            };
+            crate::tap::push(tap, left, right);
+        }
+    }
+    result
 }
 
 impl Audio {
-    pub fn new() -> Self {
+    /// With `tap`, a copy of what's played goes there (see tap.rs).
+    pub fn new(tap: Option<crate::tap::Producer>) -> Self {
         Audio {
             driver: std::ptr::null_mut(),
+            render: Box::new(Render {
+                synth: std::ptr::null_mut(),
+                tap,
+                fx: [vec![0.0; MAX_PERIOD], vec![0.0; MAX_PERIOD]],
+            }),
         }
     }
 
@@ -37,9 +134,10 @@ impl Audio {
 
     pub fn open(&mut self, settings: &settings::Settings, syn: &synth::Synth) -> bool {
         if !self.is_open() {
-            self.driver = unsafe {
-                new_fluid_audio_driver(settings.to_raw() as fluid_ptr, syn.to_raw() as fluid_ptr)
-            };
+            self.render.synth = syn.to_raw() as fluid_ptr;
+            let data = &mut *self.render as *mut Render as fluid_ptr;
+            self.driver =
+                unsafe { new_fluid_audio_driver2(settings.to_raw() as fluid_ptr, render, data) };
             if !self.is_open() {
                 warn!("Failed to open the audio driver");
             }
@@ -109,6 +207,7 @@ pub fn try_init(
     startup_sf2_file: &str,
     startup_midi_file: &str,
     volume: i32,
+    tap: Option<crate::tap::Producer>,
 ) -> (synth::Synth, settings::Settings, Audio, Option<u32>) {
     let mut settings = settings::Settings::new();
     // try to optimize for low latency
@@ -148,7 +247,7 @@ pub fn try_init(
 
     set_volume(&syn, volume);
 
-    let mut adriver = Audio::new();
+    let mut adriver = Audio::new(tap);
     adriver.open(&settings, &syn);
 
     // Polyphony 16 for the jingle and for the sax alike. The main loop ends
@@ -240,6 +339,99 @@ fn play_jingle(syn: &mut synth::Synth, sf2file: &str, midifile: &str) -> Option<
 mod tests {
     use super::*;
 
+    extern "C" {
+        fn fluid_synth_write_float(
+            synth: fluid_ptr,
+            len: i32,
+            lout: *mut f32,
+            loff: i32,
+            lincr: i32,
+            rout: *mut f32,
+            roff: i32,
+            rincr: i32,
+        ) -> i32;
+    }
+
+    // A synth playing a note through a reverberant preset.
+    fn playing(sf2: &str) -> synth::Synth {
+        let mut settings = settings::Settings::new();
+        let syn = synth::Synth::new(&mut settings);
+        std::mem::forget(settings);
+        syn.sfload(sf2, 1).expect("soundfont loads");
+        syn.program_change(0, 66);
+        syn.cc(0, 91, 127); // reverb send, full
+        syn.noteon(0, 60, 127);
+        syn
+    }
+
+    // The tap's render callback must sound like fluidsynth's own driver
+    // path, effects included: fluid_synth_process leaves them out unless
+    // given buffers for them.
+    #[test]
+    fn callback_renders_like_the_driver() {
+        let Ok(sf2) = std::env::var("HAXO_TEST_SF2") else {
+            return;
+        };
+        const N: usize = 64;
+        const PERIODS: usize = 200;
+        let reference = playing(&sf2);
+        let ours = playing(&sf2);
+        let mut audio = Audio::new(None);
+        audio.render.synth = ours.to_raw() as fluid_ptr;
+        let data = &mut *audio.render as *mut Render as *mut std::ffi::c_void;
+        let (mut diff, mut energy, mut wet_diff) = (0f64, 0f64, 0f64);
+        let bare = playing(&sf2);
+        for _ in 0..PERIODS {
+            let (mut rl, mut rr) = ([0f32; N], [0f32; N]);
+            unsafe {
+                fluid_synth_write_float(
+                    reference.to_raw() as fluid_ptr,
+                    N as i32,
+                    rl.as_mut_ptr(),
+                    0,
+                    1,
+                    rr.as_mut_ptr(),
+                    0,
+                    1,
+                )
+            };
+            let (mut l, mut r) = ([0f32; N], [0f32; N]);
+            let mut out = [l.as_mut_ptr(), r.as_mut_ptr()];
+            render(data, N as i32, 0, std::ptr::null_mut(), 2, out.as_mut_ptr());
+            // And without effects, to show the test can tell.
+            let (mut bl, mut br) = ([0f32; N], [0f32; N]);
+            let mut bout = [bl.as_mut_ptr(), br.as_mut_ptr()];
+            unsafe {
+                fluid_synth_process(
+                    bare.to_raw() as fluid_ptr,
+                    N as i32,
+                    0,
+                    std::ptr::null_mut(),
+                    2,
+                    bout.as_mut_ptr(),
+                )
+            };
+            for i in 0..N {
+                diff += ((l[i] - rl[i]) as f64).powi(2) + ((r[i] - rr[i]) as f64).powi(2);
+                wet_diff += ((bl[i] - rl[i]) as f64).powi(2) + ((br[i] - rr[i]) as f64).powi(2);
+                energy += (rl[i] as f64).powi(2) + (rr[i] as f64).powi(2);
+            }
+        }
+        println!(
+            "energy {:.3e}, ours vs driver {:.3e}, without effects {:.3e}",
+            energy, diff, wet_diff
+        );
+        assert!(energy > 0.0);
+        assert!(
+            diff < energy * 1e-6,
+            "callback output differs from the driver's"
+        );
+        assert!(
+            wet_diff > energy * 1e-4,
+            "the test can't tell effects from none"
+        );
+    }
+
     // Needs a soundfont in HAXO_TEST_SF2; passes vacuously without one.
     #[test]
     fn lists_the_programs_of_a_bank() {
@@ -271,4 +463,9 @@ pub fn set_volume(syn: &synth::Synth, volume: i32) {
     if syn.get_gain() != gain {
         warn!("Failed to set gain to {}", gain);
     }
+}
+
+/// The rate the synth renders at.
+pub fn sample_rate(settings: &settings::Settings) -> u32 {
+    settings.getnum("synth.sample-rate").unwrap_or(44100.0) as u32
 }
