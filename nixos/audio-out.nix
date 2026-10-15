@@ -97,7 +97,8 @@ in
         "RUST_LOG=info"
         # PipeWire's own buffering for this stream: 256 frames.
         "PIPEWIRE_LATENCY=256/48000"
-        "PIPEWIRE_PROPS={ node.linger = true }"
+        # Quoted: systemd splits unquoted values at spaces.
+        ''"PIPEWIRE_PROPS={ node.linger = true }"''
       ];
     };
   };
