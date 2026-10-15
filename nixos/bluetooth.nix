@@ -59,6 +59,12 @@ in
         # monitoring wireplumber turns Bluetooth off for inactive ones.
         "monitor.bluez.seat-monitoring" = "disabled";
       };
+      # The board only sends audio. With every role on offer, a computer
+      # that pairs (bagel did) can pick it as a speaker and stream to it
+      # instead (a bluez_input source appeared, no sink).
+      "monitor.bluez.properties" = {
+        "bluez5.roles" = [ "a2dp_source" ];
+      };
     };
   };
 
