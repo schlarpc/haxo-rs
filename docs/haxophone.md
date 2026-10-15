@@ -203,9 +203,12 @@ on the way: the settings file stays the one source of truth (the server
 edits it through haxophone-config); the server is Rust, in the haxo-rs
 workspace with the control protocol as a shared crate.
 
-Still open: the audio tap (one more tap on the own render loop, a ring
-buffer written without blocking, maybe Opus if the CPU allows), and the
-server's CPU cost measured against the synth's headroom.
+Since 2026-10-15 it runs unprivileged (a root helper edits the settings
+file), guards Wi-Fi changes made over Wi-Fi, and streams the instrument's
+sound to the page and as an endless WAV for ffmpeg and the like; haxo001
+renders through fluidsynth's callback driver for that (the first piece
+of the own render loop in "Outputs"). Still open: the server's CPU cost
+under several listeners, measured against the synth's headroom.
 
 ## HAT audio hardware (from haxo-hw `haxophone001.kicad_sch` netlist)
 

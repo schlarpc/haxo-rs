@@ -15,9 +15,10 @@ changes Wi-Fi, Bluetooth and sounds.
   Artifact; the server wraps it. Served by the board it uses the real API.
   Anywhere else (a preview, a file) it keeps its in-page mock
   (`createMockApi()`), so the design can still be worked on without a board.
-- **haxo001 hooks:** `--control-socket`, a Unix socket with JSON lines.
-  The protocol is the `haxo-control` crate, which both binaries use (see
-  "Control socket").
+- **haxo001 hooks:** `--control-socket` (live state and settings, JSON
+  lines) and `--audio-socket` (its sound, raw PCM), both Unix sockets. The
+  protocol is the `haxo-control` crate, which both binaries use (see
+  "Control socket" and "Audio").
 
 Started 2026-10-13 as a frontend spike with a mocked backend; plumbed in
 2026-10-14.
@@ -28,8 +29,7 @@ Started 2026-10-13 as a frontend spike with a mocked backend; plumbed in
   instrument's keys lighting as they're pressed, the note haxo-rs's notemap
   gives for that fingering, and breath as the CC2 value. **Demo tune** and
   **My fingers** run in the page, without the instrument, to look up any
-  fingering. The audio tap ("Listen in") is not there yet; it needs the
-  instrument's own render loop (docs/haxophone.md, "Outputs").
+  fingering. **Listen in** plays the instrument's sound (see "Audio").
 - **Wi-Fi**: current connection, a scan with signal and security, joining
   with a passphrase and optionally saving it, saved networks with Forget.
   802.1X networks are listed but marked unsupported.
@@ -57,16 +57,50 @@ Wrong passwords wait a second. It is plain HTTP: the password crosses the
 Wi-Fi in the clear (WPA protects it from outsiders, not from others on
 the same network).
 
+Players (ffmpeg, VLC) can't log in: they send the password from the URL
+as HTTP Basic (any user name), which works on every call. Only
+`stream.wav`'s 401 challenges for it, because a challenge on the API would
+make browsers show their own login box over the page's.
+
+## Privileges
+
+haxo-web runs as its own user, `haxo-web`, with one capability
+(CAP_NET_BIND_SERVICE, for port 80) and systemd's sandboxing
+(ProtectSystem=strict, NoNewPrivileges, a syscall filter...). What it
+needs beyond that is granted narrowly (nixos/webui.nix):
+
+- haxo001's sockets: haxo runs as root with `Group=haxo` and `UMask=0007`,
+  so they come out `root:haxo` 0770; haxo-web is in `haxo`.
+- iwd: its D-Bus policy admits root and wheel only (wheel would mean
+  sudo); a policy file admits the `haxo-web` user to send to iwd. iwd's
+  calls back into haxo-web's passphrase agent come from root, which may.
+- BlueZ: its policy admits everyone.
+- Uploads: `/var/lib/haxophone/files` is `root:haxo-web` 2775.
+- The settings file: see below.
+
+Checked on the board: haxo-web's effective and ambient capability sets
+are 0x400 (CAP_NET_BIND_SERVICE alone).
+
 ## Settings
 
 Settings that outlive a boot live in the settings file
 (`config/haxophone.toml` on the FAT partition), which a card reader can
-also edit. The server never writes it directly: `haxophone-config` does
-(`wifi-add`, `wifi-remove`, `set-instrument`, and `show` to read it).
+also edit. FAT has one permission mask for every file on it, kernels and
+extlinux.conf included, so haxo-web can't be given write access to just
+this one. A root helper edits it instead: `haxophone-config serve`, run
+per connection by a socket-activated unit (`haxophone-settings.socket`,
+`root:haxo-web` 0660) with the file's path fixed in its command line. One
+JSON request per connection: `show`, `check-password`, `wifi-add`,
+`wifi-remove`, `set-instrument`, `apply` (restarts haxophone-config).
+The web password never leaves it: `show` only says whether one is set,
+and `check-password` answers match or not. Each request costs about
+1.3 s on the board (Python starting), which logins and the Sounds tab feel.
+
 Edits change only the lines they touch, so comments and layout stay, and
-the result is checked before it replaces the file. The server serializes
-its edits: two concurrent read-modify-writes lost one (seen with preset
-and transpose changed back to back).
+the result is checked before it replaces the file. Edits take turns (a
+lock in the helper, and a queue in haxo-web): two concurrent
+read-modify-writes lost one (seen with preset and transpose changed back
+to back).
 
 `[instrument]` (soundfont, program, transpose, volume) is what haxo001
 starts with: `haxophone-config apply` writes it to
@@ -104,7 +138,7 @@ JSON over HTTP, same origin as the page. Errors are
 
 | Call | Body / result |
 |---|---|
-| `GET /api/session` | `{ trusted, authenticated, password_set }` (no login needed) |
+| `GET /api/session` | `{ trusted, authenticated, password_set, via }` (no login needed); `via` is `usb`, `wifi` or `other` |
 | `POST /api/login` | `{ password }` → 204 with the cookie, 401, or 403 when no password is set |
 
 Everything else answers 401 without a session (off the USB link).
@@ -114,15 +148,54 @@ Everything else answers 401 without a session (off the USB link).
 Text frames with the control socket's state as above, or `null` while
 haxo001 isn't running, at most every 16 ms.
 
-### Audio tap: `WS /api/audio` (not yet)
+### Audio: `WS /api/audio`, `GET /api/stream.wav`
 
-Binary frames of interleaved PCM from the own render loop's tap (see
-docs/haxophone.md "Outputs"): the same non-blocking ring buffer as the
-Bluetooth bridge, so a slow or vanished listener drops audio and never
-stalls the in-ear path. First message is JSON
-`{ "rate": 48000, "channels": 1, "format": "s16le" }`. The page plays it
-through an AudioWorklet with a ~100 ms jitter buffer. Opus instead of PCM if
-the Wi-Fi link needs it and the CPU allows (measure next to the synth).
+The instrument's sound, raw: s16le, mono (L+R summed; the jack plays the
+left channel only), at the synth's rate (44.1 kHz), about 88 KB/s per
+listener.
+
+- `WS /api/audio`: a text frame `{ "rate", "channels", "format" }` (again
+  when haxo restarts, `null` while it's down), then binary frames, one
+  every ~5 ms.
+- `GET /api/stream.wav`: an endless WAV over HTTP (header sizes
+  0xFFFFFFFF, which players read as unknown). It ends when haxo restarts,
+  since the format could change; players reconnect. For example:
+  `ffplay -fflags nobuffer -flags low_delay http://10.68.0.1/api/stream.wav`,
+  or over Wi-Fi `http://x:PASSWORD@haxophone.local/api/stream.wav`.
+
+Decided 2026-10-15: plain PCM, not Opus, HLS/DASH, WebRTC or RTP. HLS and
+DASH are segment-based (seconds of latency even in their low-latency
+variants), WebRTC is heavy and ffmpeg can't consume it, RTP isn't
+browser-playable. PCM costs no CPU and adds no codec delay; Opus would
+only win on bandwidth (internet, many listeners) and can be another
+output of the same tap later.
+
+## Audio
+
+haxo001 renders through fluidsynth's callback driver
+(`new_fluid_audio_driver2`): each period it calls `fluid_synth_process`
+in fluidsynth's realtime audio thread, so the jack gets exactly what it
+did before, and pushes a mono copy into a wait-free ring (rtrb), dropping
+the period when the ring is full. `fluid_synth_process` leaves reverb and
+chorus out unless given buffers for them, so the callback mixes one
+stereo pair of effects back in; a test compares it with
+`fluid_synth_write_float` on the same notes (equal to 1e-14 against a
+signal energy of 6; without the effects, off by 0.55).
+
+A normal-priority thread drains the ring every 5 ms to the one client of
+`--audio-socket` (haxo-web): the format line, then PCM. Past 40 ms waiting
+it skips to the newest, and what the client can't take is dropped, never
+queued. haxo-web reads it once and splits it 1:N through a broadcast
+channel (16 chunks, ~80 ms); a listener that falls behind skips ahead.
+The page's AudioWorklet starts playing at 40 ms buffered and jumps ahead
+past 120 ms; underruns play silence until it has 40 ms again.
+
+Measured on bagel against a stand-in tap: no backlog (the first 100 ms of
+a new listener brings one chunk more than 100 ms of audio, then exactly
+real time); five HTTP listeners and a WebSocket at once, each real time;
+the page plays at 44.1 kHz, base output latency 11 ms, the test tone's
+level exact at the analyser. On the board: ffmpeg reads it from
+http://10.68.0.1/api/stream.wav (silent, nobody playing).
 
 ### Wi-Fi (iwd)
 
@@ -135,10 +208,16 @@ the Wi-Fi link needs it and the CPU allows (measure next to the synth).
 
 `signal` is dBm; `security` is `open`, `WPA2/3` (iwd doesn't tell them
 apart), `802.1X` or `WEP`. Joining hands the passphrase to iwd through an
-agent haxo-web registers. `save: true` first writes a `[[wifi]]` block and
-restarts `haxophone-config`; without it the network lasts until the next
-reboot. Joining over Wi-Fi can drop the page's own connection; the USB
-link is the reliable place for it.
+agent haxo-web registers; saved networks need none. `save: true` first
+writes a `[[wifi]]` block and restarts `haxophone-config`; without it the
+network lasts until the next reboot.
+
+**Guard:** joining another network, or forgetting the one in use, from a
+page that came in over Wi-Fi answers `409 { error, confirm: "disconnect" }`
+with a warning, until the request is repeated with `disconnect_ok`
+(`?disconnect_ok=true` for the DELETE). The page shows the warning with
+"Join anyway" / "Forget anyway". Over the USB cable there's no warning.
+Checked on the board over Wi-Fi: both answer 409.
 
 ### Bluetooth (BlueZ)
 
@@ -212,8 +291,7 @@ board itself.
 ## Open
 
 - **Codec** in the Bluetooth tab, from PipeWire.
-- **Audio tap**, after the own render loop.
-- **Privilege**: haxo-web runs as root (settings file on FAT,
-  `systemctl restart`, iwd and BlueZ policies). A user with the D-Bus
-  policies, a group-writable mount and a polkit rule would do.
+- **Opus**, if listeners over the internet or many at once need it.
+- **The helper's 1.3 s per request**: a resident helper (or one in Rust)
+  would answer at once.
 - **HTTPS**, if the password on a shared Wi-Fi matters.
