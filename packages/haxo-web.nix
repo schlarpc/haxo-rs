@@ -22,7 +22,9 @@ in
 craneLib.buildPackage (
   commonArgs
   // {
-    cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+    # Keyed on Cargo.toml and Cargo.lock only, not the commit (see
+    # packages/haxo-rs).
+    cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { version = "0"; });
     meta = {
       description = "The Haxophone's web UI";
       platforms = lib.platforms.linux;

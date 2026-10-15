@@ -45,7 +45,18 @@ in
 craneLib.buildPackage (
   commonArgs
   // {
-    cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+    # The dependencies depend on Cargo.toml and Cargo.lock only. Without
+    # the commit's date (in the version) and hash (vergen's), every new
+    # fork commit would rebuild all of them under emulation.
+    cargoArtifacts = craneLib.buildDepsOnly (
+      builtins.removeAttrs commonArgs [
+        "VERGEN_GIT_DESCRIBE"
+        "VERGEN_GIT_SHA"
+      ]
+      // {
+        version = "0";
+      }
+    );
 
     postInstall = ''
       install -Dm644 notemap.json $out/share/haxo/notemap.json
