@@ -107,12 +107,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     let opt = Opt::from_args();
     debug!("{:?}", opt);
 
-    let (tap_in, tap_out) = match opt.audio_socket {
-        Some(_) => {
+    // The tap serves from before the synth starts, so listeners hear the
+    // startup tune too. Its rate is the one asked for; checked below.
+    let tap_in = match opt.audio_socket.as_deref() {
+        Some(path) => {
             let (p, c) = tap::ring(opt.sample_rate);
-            (Some(p), Some(c))
+            let format = haxo_control::AudioFormat::s16le(opt.sample_rate, 1);
+            match tap::serve(path, c, format) {
+                Ok(()) => Some(p),
+                Err(e) => {
+                    warn!("No audio tap at {}: {}", path, e);
+                    None
+                }
+            }
         }
-        None => (None, None),
+        None => None,
     };
     let (synth, settings, mut audio, mut soundfont_id) = synth::try_init(
         &opt.sf2_file,
@@ -123,11 +132,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         opt.sample_rate,
         tap_in,
     );
-    if let (Some(path), Some(ring)) = (opt.audio_socket.as_deref(), tap_out) {
-        let format = haxo_control::AudioFormat::s16le(synth::sample_rate(&settings), 1);
-        if let Err(e) = tap::serve(path, ring, format) {
-            warn!("No audio tap at {}: {}", path, e);
-        }
+    if synth::sample_rate(&settings) != opt.sample_rate {
+        warn!(
+            "Rendering at {} Hz, not the {} Hz asked for: the audio tap is mislabelled",
+            synth::sample_rate(&settings),
+            opt.sample_rate
+        );
     }
     let mut control = opt.control_socket.as_deref().and_then(|path| {
         control::Control::start(path)

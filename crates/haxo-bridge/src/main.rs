@@ -70,9 +70,18 @@ const REPORT: Duration = Duration::from_secs(10);
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
+    // Retries every second; each new state is logged once, not every try.
+    // The USB gadget refuses audio (EIO) whenever the host isn't recording
+    // from it, which is the usual state, not a fault.
+    let mut last = String::new();
     loop {
         if let Err(e) = run(&args) {
-            warn!("{}", e);
+            if e != last {
+                warn!("{}", e);
+                last = e;
+            }
+        } else {
+            last.clear();
         }
         thread::sleep(Duration::from_secs(1));
     }
@@ -161,10 +170,7 @@ fn run(args: &Args) -> Result<(), String> {
         .unwrap_or((args.period, 0));
     let period = period.max(4);
     let channels = args.channels as usize;
-    info!(
-        "Playing the tap ({} Hz) into {} ({} ch, {} frame periods), keeping {} ms buffered",
-        format.rate, args.device, channels, period, args.target_ms
-    );
+    let mut announced = false;
     let io = pcm.io_i16().map_err(|e| e.to_string())?;
     let mut slip = Slip::<f32>::new(period, 1, FixedAsync::Output).map_err(|e| e.to_string())?;
 
@@ -267,12 +273,40 @@ fn run(args: &Args) -> Result<(), String> {
             None
         };
         if let Some(w) = write {
-            if let Err(e) = io.writei(w) {
-                stats.xruns += 1;
-                pcm.try_recover(e, true)
-                    .map_err(|e| format!("ALSA: {}", e))?;
+            match io.writei(w) {
+                Ok(_) if !announced => {
+                    info!(
+                        "Playing the tap ({} Hz) into {} ({} ch, {} frame periods), keeping {} ms buffered",
+                        format.rate, args.device, channels, period, args.target_ms
+                    );
+                    announced = true;
+                }
+                Ok(_) => {}
+                Err(e) if e.errno() as i32 == libc_eio() => {
+                    return Err(if announced {
+                        format!(
+                            "{} stopped taking audio (nobody recording?); waiting",
+                            args.device
+                        )
+                    } else {
+                        format!(
+                            "{} isn't taking audio (nobody recording from it?); waiting",
+                            args.device
+                        )
+                    });
+                }
+                Err(e) => {
+                    stats.xruns += 1;
+                    pcm.try_recover(e, true)
+                        .map_err(|e| format!("ALSA: {}", e))?;
+                }
             }
         }
         stats.report();
     }
+}
+
+// EIO, without a libc dependency for one number.
+fn libc_eio() -> i32 {
+    5
 }
