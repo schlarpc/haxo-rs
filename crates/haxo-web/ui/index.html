@@ -1329,7 +1329,7 @@ function drawScope() {
 
 /* ------------------------------------------------------------------ */
 /* Wi-Fi */
-const wifiUi = { nearby: null, scanning: false, open: null, busy: null, error: null };
+const wifiUi = { nearby: null, scanning: false, open: null, busy: null, error: null, saved: new Set() };
 function bars(dbm) {
   const n = dbm > -55 ? 4 : dbm > -65 ? 3 : dbm > -75 ? 2 : 1;
   return el("span", { class: "bars", "aria-label": `signal ${n} of 4` },
@@ -1337,6 +1337,7 @@ function bars(dbm) {
 }
 async function renderWifi() {
   const st = await api.wifi.status();
+  wifiUi.saved = new Set(st.saved.map((x) => x.ssid));
   const cur = st.current;
   $("#wifi-current").replaceChildren(
     el("h2", { style: "margin:0" }, "Connected"),
@@ -1405,7 +1406,8 @@ function renderNearby() {
         }
       } },
         n.security === "open" ? null : el("label", { class: "field", for: pskId }, "Passphrase",
-          el("input", { type: "password", id: pskId, autocomplete: "off", minlength: 8, required: true, placeholder: "8–63 characters" })),
+          el("input", { type: "password", id: pskId, autocomplete: "off", minlength: 8, required: !wifiUi.saved.has(n.ssid),
+            placeholder: wifiUi.saved.has(n.ssid) ? "saved, leave empty" : "8–63 characters" })),
         el("label", { class: "row", style: "gap:8px;font-size:14px" },
           el("input", { type: "checkbox", id: saveId, checked: true }), "Save to the card, join at every boot"),
         wifiUi.error ? el("p", { class: "hint", style: "color:var(--bad)" }, wifiUi.error) : null,

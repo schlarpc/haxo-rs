@@ -336,7 +336,13 @@ pub async fn connect(
             body.ssid
         )));
     }
-    if net.security != "open" && body.psk.is_none() {
+    // iwd knows saved networks (and ones joined this boot): no passphrase.
+    let known = proxy(app.system_bus().await?, &path, "net.connman.iwd.Network")
+        .await?
+        .get_property::<OwnedObjectPath>("KnownNetwork")
+        .await
+        .is_ok();
+    if net.security != "open" && body.psk.is_none() && !known {
         return Err(Error::bad_request(format!(
             "{} needs a passphrase.",
             body.ssid
