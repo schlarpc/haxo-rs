@@ -9,6 +9,7 @@
   haxophone-config wifi-remove SSID [--config PATH]
   haxophone-config set-instrument [--soundfont NAME] [--program N]
                                   [--transpose N] [--volume N] [--config PATH]
+  haxophone-config serve [--config PATH] [--apply-unit UNIT] [--lock FILE]
 
 `apply` runs at boot (nixos/config-file.nix): it writes iwd's network files
 and the haxophone user's authorized_keys from the settings file, and puts a
@@ -18,13 +19,23 @@ with the public keys from each FILE (an authorized_keys or .pub file) filled
 in.
 
 `show` prints the parsed settings as JSON, and `wifi-add`, `wifi-remove`
-and `set-instrument` edit the file; the web UI uses these. Edits change
-only the lines they touch, so comments and layout stay, and the result is
-checked before it replaces the file.
+and `set-instrument` edit the file. Edits change only the lines they
+touch, so comments and layout stay, and the result is checked before it
+replaces the file.
+
+`serve` answers one JSON request on stdin with one JSON line on stdout:
+the web UI's way in, as a socket-activated service running as root, so
+the web server itself needn't be (nixos/webui.nix). It always edits the
+--config it was started with, and the web password never leaves it.
 """
 
 import argparse
+import contextlib
+import fcntl
+import hmac
+import io
 import json
+import subprocess
 import os
 import re
 import shutil
@@ -262,7 +273,9 @@ def wifi_blocks(lines):
 
 
 def wifi_add(args):
-    psk = sys.stdin.readline().rstrip("\n") if args.psk_stdin else None
+    psk = getattr(args, "psk", None)
+    if psk is None and args.psk_stdin:
+        psk = sys.stdin.readline().rstrip("\n")
     if not 1 <= len(args.ssid.encode()) <= 32:
         print("ssid must be 1-32 bytes", file=sys.stderr)
         return 2
@@ -346,9 +359,78 @@ def show(args):
         "ssh_keys": len(settings.keys),
         "wifi": [{"ssid": ssid, "open": psk is None} for ssid, psk in settings.networks],
         "instrument": settings.instrument,
-        "web": {"password": settings.web_password},
+        "web": {"password_set": settings.web_password is not None},
         "problems": problems,
     }, ensure_ascii=False))
+    return 0
+
+
+def serve(args):
+    """One request: {"cmd": ..., ...} in, {"ok": ..., "result" or "error"} out."""
+    try:
+        req = json.loads(sys.stdin.readline())
+        if not isinstance(req, dict):
+            raise ValueError("not an object")
+    except ValueError as e:
+        print(json.dumps({"ok": False, "error": f"bad request: {e}"}))
+        return 2
+    cmd = req.get("cmd")
+    config = args.config
+
+    def run(func, **kw):
+        # The CLI commands, with their messages captured for the reply.
+        ns = argparse.Namespace(config=config, **kw)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = func(ns)
+        return code, out.getvalue(), err.getvalue().strip()
+
+    def str_arg(k, required=True):
+        v = req.get(k)
+        if v is None and not required:
+            return None
+        if not isinstance(v, str):
+            raise ValueError(f"{k} must be a string")
+        return v
+
+    def int_arg(k):
+        v = req.get(k)
+        if v is not None and (not isinstance(v, int) or isinstance(v, bool)):
+            raise ValueError(f"{k} must be an integer")
+        return v
+
+    Path(args.lock).parent.mkdir(parents=True, exist_ok=True)
+    with open(args.lock, "w") as lock:
+        # Edits read, change and rewrite the file: one at a time.
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            if cmd == "show":
+                code, out, err = run(show)
+                reply = {"ok": code == 0, "result": json.loads(out)} if code == 0 else {"ok": False, "error": err or out}
+            elif cmd == "check-password":
+                given = str_arg("password")
+                settings, _ = load(config)
+                ok = settings.web_password is not None and hmac.compare_digest(
+                    given.encode(), settings.web_password.encode())
+                reply = {"ok": True, "result": {"set": settings.web_password is not None, "match": ok}}
+            elif cmd in ("wifi-add", "wifi-remove", "set-instrument"):
+                if cmd == "wifi-add":
+                    code, _, err = run(wifi_add, ssid=str_arg("ssid"), psk=str_arg("psk", False), psk_stdin=False)
+                elif cmd == "wifi-remove":
+                    code, _, err = run(wifi_remove, ssid=str_arg("ssid"))
+                else:
+                    code, _, err = run(set_instrument, soundfont=str_arg("soundfont", False),
+                                       program=int_arg("program"), transpose=int_arg("transpose"),
+                                       volume=int_arg("volume"))
+                reply = {"ok": code == 0} if code == 0 else {"ok": False, "error": err or f"{cmd} failed"}
+            elif cmd == "apply":
+                r = subprocess.run(["systemctl", "restart", args.apply_unit], capture_output=True, text=True)
+                reply = {"ok": r.returncode == 0} if r.returncode == 0 else {"ok": False, "error": r.stderr.strip()}
+            else:
+                reply = {"ok": False, "error": f"unknown command {cmd!r}"}
+        except (ValueError, OSError, tomllib.TOMLDecodeError) as e:
+            reply = {"ok": False, "error": str(e)}
+    print(json.dumps(reply, ensure_ascii=False))
     return 0
 
 
@@ -424,6 +506,12 @@ def main():
     p.add_argument("--volume", type=int)
     p.add_argument("--config", default="/boot/config/haxophone.toml")
     p.set_defaults(func=set_instrument)
+    p = sub.add_parser("serve")
+    p.add_argument("--config", default="/boot/config/haxophone.toml")
+    p.add_argument("--apply-unit", default="haxophone-config.service",
+                   help="the unit that applies the file, restarted by the apply command")
+    p.add_argument("--lock", default="/run/haxophone-config/edit.lock")
+    p.set_defaults(func=serve)
     args = parser.parse_args()
     sys.exit(args.func(args))
 

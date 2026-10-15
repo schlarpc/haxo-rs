@@ -35,6 +35,7 @@ in
     # written by haxophone-config at boot.
     envFile = "/run/haxophone-config/haxo.env";
     controlSocket = "/run/haxo/control.sock";
+    audioSocket = "/run/haxo/audio.sock";
   };
 
   imports = [
@@ -88,6 +89,10 @@ in
       ];
       EnvironmentFile = "-/run/haxophone-config/haxo.env";
       RuntimeDirectory = "haxo";
+      # Root, but with group haxo and this umask its control socket comes
+      # out root:haxo 0660, for haxo-web (webui.nix).
+      Group = "haxo";
+      UMask = "0007";
       ExecStart = lib.concatStringsSep " " [
         (lib.getExe haxo-rs)
         "--notemap-file ${haxo-rs}/share/haxo/notemap.json"
@@ -99,6 +104,7 @@ in
         "--startup-midi-file ${haxo-rs}/share/haxo/Startup_Haxophone.mid"
         "--ble-midi haxophone"
         "--control-socket /run/haxo/control.sock"
+        "--audio-socket /run/haxo/audio.sock"
       ];
     };
   };

@@ -218,7 +218,8 @@ in
     };
   };
 
-  systemd.tmpfiles.rules = [ "d ${mtpRoot} 0755 root root -" ];
+  # Group haxo-web, setgid: the web UI (webui.nix) uploads soundfonts here.
+  systemd.tmpfiles.rules = [ "d ${mtpRoot} 2775 root haxo-web -" ];
 
   # Login on the USB serial console (autologin is set in configuration.nix).
   systemd.services."serial-getty@ttyGS0" = {
