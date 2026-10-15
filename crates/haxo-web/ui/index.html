@@ -1228,7 +1228,31 @@ class Tap extends AudioWorkletProcessor {
   }
 }
 registerProcessor("haxo-tap", Tap);`;
-const tap = { ws: null, ctx: null, node: null };
+const tap = { ws: null, ctx: null, node: null, sched: null };
+// Without a secure context (plain HTTP to the board, which is the usual
+// case) browsers have no AudioWorklet: schedule the chunks as buffers on
+// the audio clock instead, with the same 40 ms start and 120 ms limit.
+function scheduler(ctx, out) {
+  const target = 0.04, max = 0.12, batch = Math.round(ctx.sampleRate * 0.02);
+  let next = 0, pending = [], pendingLen = 0;
+  return (data) => {
+    const s = new Int16Array(data);
+    pending.push(s); pendingLen += s.length;
+    if (pendingLen < batch) return;
+    const buf = ctx.createBuffer(1, pendingLen, ctx.sampleRate), ch = buf.getChannelData(0);
+    let o = 0;
+    for (const p of pending) { for (let i = 0; i < p.length; i++) ch[o++] = p[i] / 32768; }
+    pending = []; pendingLen = 0;
+    const now = ctx.currentTime;
+    // Behind (underrun) or too far ahead: start again 40 ms out.
+    if (next < now || next - now > max) next = now + target;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(out);
+    src.start(next);
+    next += buf.duration;
+  };
+}
 async function startTap() {
   stopTap();
   const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/api/audio");
@@ -1241,17 +1265,26 @@ async function startTap() {
       // A context at the stream's rate: no resampling before the worklet.
       if (tap.ctx) tap.ctx.close();
       const ctx = (tap.ctx = new AudioContext({ sampleRate: fmt.rate, latencyHint: "interactive" }));
-      const url = URL.createObjectURL(new Blob([TAP_WORKLET], { type: "text/javascript" }));
-      await ctx.audioWorklet.addModule(url);
-      URL.revokeObjectURL(url);
-      tap.node = new AudioWorkletNode(ctx, "haxo-tap", { outputChannelCount: [1] });
       audio.analyser = ctx.createAnalyser();
       audio.analyser.fftSize = 1024;
-      tap.node.connect(audio.analyser).connect(ctx.destination);
+      audio.analyser.connect(ctx.destination);
+      if (ctx.audioWorklet) {
+        const url = URL.createObjectURL(new Blob([TAP_WORKLET], { type: "text/javascript" }));
+        await ctx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+        tap.node = new AudioWorkletNode(ctx, "haxo-tap", { outputChannelCount: [1] });
+        tap.node.connect(audio.analyser);
+        tap.sched = null;
+      } else {
+        tap.node = null;
+        tap.sched = scheduler(ctx, audio.analyser);
+      }
       ctx.resume();
       audio.on = true;
     } else if (tap.node) {
       tap.node.port.postMessage(e.data, [e.data]);
+    } else if (tap.sched) {
+      tap.sched(e.data);
     }
   };
   ws.onclose = () => { if (tap.ws === ws) { stopTap(); $("#listen").textContent = "Listen"; } };
@@ -1261,7 +1294,7 @@ function stopTap() {
   tap.ws = null;
   if (ws) ws.close();
   if (tap.ctx) tap.ctx.close();
-  tap.ctx = tap.node = null;
+  tap.ctx = tap.node = tap.sched = null;
   audio.on = false;
   audio.analyser = null;
 }
