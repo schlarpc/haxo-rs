@@ -41,6 +41,9 @@ struct Args {
     /// Channels to open it with; the mono tap goes to each.
     #[arg(long, default_value_t = 2)]
     channels: u32,
+    /// The tap's rate, which the device is opened at.
+    #[arg(long, default_value_t = 48000)]
+    rate: u32,
     /// Frames per period (each write).
     #[arg(long, default_value_t = 256)]
     period: usize,
@@ -160,18 +163,37 @@ impl Stats {
 }
 
 fn run(args: &Args) -> Result<(), String> {
-    let (mut tap, format) =
-        connect(&args.tap).map_err(|e| format!("tap {}: {}", args.tap.display(), e))?;
-    let rate = format.rate as f64;
-    let pcm = open(args, format.rate).map_err(|e| format!("ALSA {}: {}", args.device, e))?;
-    let (period, _) = pcm
+    // The device first, with a little silence: the USB gadget refuses
+    // audio while no host records, and the tap needn't be bothered (a
+    // listener coming and going every second) until it would play.
+    let pcm = open(args, args.rate).map_err(|e| format!("ALSA {}: {}", args.device, e))?;
+    let (buffer, period) = pcm
         .get_params()
-        .map(|(b, p)| (p as usize, b))
-        .unwrap_or((args.period, 0));
+        .map(|(b, p)| (b as usize, p as usize))
+        .unwrap_or((args.period * args.periods, args.period));
     let period = period.max(4);
     let channels = args.channels as usize;
     let mut announced = false;
     let io = pcm.io_i16().map_err(|e| e.to_string())?;
+    if let Err(e) = io.writei(&vec![0i16; period * channels]) {
+        return Err(if e.errno() as i32 == libc_eio() {
+            format!(
+                "{} isn't taking audio (nobody recording from it?); waiting",
+                args.device
+            )
+        } else {
+            format!("ALSA {}: {}", args.device, e)
+        });
+    }
+    let (mut tap, format) =
+        connect(&args.tap).map_err(|e| format!("tap {}: {}", args.tap.display(), e))?;
+    if format.rate != args.rate {
+        return Err(format!(
+            "the tap is {} Hz, the device was opened at {} Hz (--rate)",
+            format.rate, args.rate
+        ));
+    }
+    let rate = format.rate as f64;
     let mut slip = Slip::<f32>::new(period, 1, FixedAsync::Output).map_err(|e| e.to_string())?;
 
     let target = args.target_ms / 1000.0 * rate;
@@ -224,7 +246,11 @@ fn run(args: &Args) -> Result<(), String> {
             started = true;
         }
 
-        let queued = pcm.delay().unwrap_or(0).max(0) as f64;
+        // What waits in this bridge's own ALSA buffer. Not snd_pcm_delay:
+        // through PipeWire that includes everything downstream (a
+        // Bluetooth codec and link, 100 ms and more), which isn't ours to
+        // steer and made the bridge drop all its input as "too much".
+        let queued = buffer.saturating_sub(pcm.avail_update().unwrap_or(0).max(0) as usize) as f64;
         // The ratio first: it decides how much input the next chunk takes.
         // The error is smoothed over about half a second: the tap delivers
         // in ~5 ms bursts, and following each would slip far more often
