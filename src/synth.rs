@@ -439,6 +439,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn reads_the_sample_rate_back() {
+        let settings = settings::Settings::new();
+        assert_eq!(sample_rate(&settings), 44100);
+        assert!(!settings.setnum("synth.sample-rate", 48000.0));
+        assert_eq!(sample_rate(&settings), 48000);
+    }
+
     // Needs a soundfont in HAXO_TEST_SF2; passes vacuously without one.
     #[test]
     fn lists_the_programs_of_a_bank() {
@@ -472,7 +480,28 @@ pub fn set_volume(syn: &synth::Synth, volume: i32) {
     }
 }
 
-/// The rate the synth renders at.
+/// The rate the synth renders at. (The binding's getnum checks for
+/// fluidsynth 1's success value, so it never reads anything on 2.)
 pub fn sample_rate(settings: &settings::Settings) -> u32 {
-    settings.getnum("synth.sample-rate").unwrap_or(44100.0) as u32
+    extern "C" {
+        fn fluid_settings_getnum(
+            settings: fluid_ptr,
+            name: *const std::ffi::c_char,
+            val: *mut f64,
+        ) -> i32;
+    }
+    let mut rate = 0f64;
+    let ok = unsafe {
+        fluid_settings_getnum(
+            settings.to_raw() as fluid_ptr,
+            b"synth.sample-rate\0".as_ptr() as *const std::ffi::c_char,
+            &mut rate,
+        )
+    } == 0;
+    if ok {
+        rate as u32
+    } else {
+        warn!("Couldn't read synth.sample-rate; assuming 44100");
+        44100
+    }
 }
