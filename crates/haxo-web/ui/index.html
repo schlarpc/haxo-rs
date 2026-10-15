@@ -1200,8 +1200,77 @@ function stopAudio() {
   if (audio.out) audio.out.gain.value = 0;
   audio.on = false;
 }
+/* The board's sound: WS /api/audio, raw PCM, into a worklet with a small */
+/* jitter buffer that jumps ahead rather than letting latency grow.      */
+const TAP_WORKLET = `
+class Tap extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.buf = new Float32Array(sampleRate);      // 1 s, far more than kept
+    this.r = 0; this.w = 0; this.n = 0; this.playing = false;
+    this.target = Math.round(sampleRate * 0.04);  // start with 40 ms
+    this.max = Math.round(sampleRate * 0.12);     // past 120 ms, jump ahead
+    this.port.onmessage = (e) => {
+      const s = new Int16Array(e.data), L = this.buf.length;
+      for (let i = 0; i < s.length; i++) { this.buf[this.w] = s[i] / 32768; this.w = (this.w + 1) % L; }
+      this.n = Math.min(L, this.n + s.length);
+      if (this.n > this.max) { const skip = this.n - this.target; this.r = (this.r + skip) % L; this.n -= skip; }
+    };
+  }
+  process(_, outputs) {
+    const out = outputs[0][0], L = this.buf.length;
+    if (!this.playing) { if (this.n < this.target) { out.fill(0); return true; } this.playing = true; }
+    for (let i = 0; i < out.length; i++) {
+      if (this.n > 0) { out[i] = this.buf[this.r]; this.r = (this.r + 1) % L; this.n--; }
+      else { out[i] = 0; this.playing = false; }
+    }
+    return true;
+  }
+}
+registerProcessor("haxo-tap", Tap);`;
+const tap = { ws: null, ctx: null, node: null };
+async function startTap() {
+  stopTap();
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/api/audio");
+  ws.binaryType = "arraybuffer";
+  tap.ws = ws;
+  ws.onmessage = async (e) => {
+    if (typeof e.data === "string") {
+      const fmt = JSON.parse(e.data);
+      if (!fmt) { $("#level-val").textContent = "instrument stopped"; return; }
+      // A context at the stream's rate: no resampling before the worklet.
+      if (tap.ctx) tap.ctx.close();
+      const ctx = (tap.ctx = new AudioContext({ sampleRate: fmt.rate, latencyHint: "interactive" }));
+      const url = URL.createObjectURL(new Blob([TAP_WORKLET], { type: "text/javascript" }));
+      await ctx.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+      tap.node = new AudioWorkletNode(ctx, "haxo-tap", { outputChannelCount: [1] });
+      audio.analyser = ctx.createAnalyser();
+      audio.analyser.fftSize = 1024;
+      tap.node.connect(audio.analyser).connect(ctx.destination);
+      ctx.resume();
+      audio.on = true;
+    } else if (tap.node) {
+      tap.node.port.postMessage(e.data, [e.data]);
+    }
+  };
+  ws.onclose = () => { if (tap.ws === ws) { stopTap(); $("#listen").textContent = "Listen"; } };
+}
+function stopTap() {
+  const ws = tap.ws;
+  tap.ws = null;
+  if (ws) ws.close();
+  if (tap.ctx) tap.ctx.close();
+  tap.ctx = tap.node = null;
+  audio.on = false;
+  audio.analyser = null;
+}
 $("#listen").addEventListener("click", () => {
-  if (api.real) return;
+  if (api.real) {
+    if (tap.ws) { stopTap(); $("#listen").textContent = "Listen"; }
+    else { startTap(); $("#listen").textContent = "Stop"; }
+    return;
+  }
   if (audio.on) { stopAudio(); $("#listen").textContent = "Listen"; }
   else { startAudio(); $("#listen").textContent = "Stop"; }
 });
@@ -1554,9 +1623,7 @@ async function start() {
     attempt(async () => renderStatus({ bt: (await api.bluetooth.status()).paired.find((p) => p.connected && p.audio !== false)?.name ?? null }));
     $("#mode-board").hidden = false;
     $("#footer-mode").textContent = "Served by the haxophone (haxo-web).";
-    $("#listen").disabled = true;
-    $("#listen").title = "Needs the board's own render loop (docs/haxophone.md, Outputs)";
-    $("#level-val").textContent = "not yet";
+
     api.live.watchInstrument((s) => {
       renderStatus({ running: !!s });
       if (!s) return;

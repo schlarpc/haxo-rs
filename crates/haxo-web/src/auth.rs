@@ -132,6 +132,17 @@ fn on_link(interface: &str, peer: Ipv4Addr) -> bool {
     })
 }
 
+fn basic_password(headers: &HeaderMap) -> Option<String> {
+    use base64::Engine;
+    let v = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let encoded = v.strip_prefix("Basic ")?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .ok()?;
+    let text = String::from_utf8(decoded).ok()?;
+    Some(text.split_once(':')?.1.to_string())
+}
+
 /// Middleware for everything under /api but the session calls.
 pub async fn require(
     State(app): State<crate::State>,
@@ -139,10 +150,34 @@ pub async fn require(
     req: Request,
     next: Next,
 ) -> Response {
+    let req_path = req.uri().path().to_string();
     if app.auth.trusted(peer) || app.auth.has_session(req.headers()) {
         return next.run(req).await;
     }
-    Error::new(StatusCode::UNAUTHORIZED, "Log in first.").into_response()
+    // HTTP Basic, for players that can't log in (ffmpeg, VLC: the password
+    // in the URL, any user name).
+    if let Some(password) = basic_password(req.headers()) {
+        if let Ok((true, true)) = settings::check_password(&app.args, &password).await {
+            return next.run(req).await;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(header::WWW_AUTHENTICATE, "Basic realm=\"haxophone\"")],
+        )
+            .into_response();
+    }
+    let mut res = Error::new(StatusCode::UNAUTHORIZED, "Log in first.").into_response();
+    // Players (ffmpeg, VLC) send the password from the URL only when
+    // challenged. Only for the stream: on the API, a challenge would make
+    // browsers show their own login box over the page's.
+    if req_path.ends_with("/stream.wav") {
+        res.headers_mut().insert(
+            header::WWW_AUTHENTICATE,
+            "Basic realm=\"haxophone\"".parse().unwrap(),
+        );
+    }
+    res
 }
 
 /// `GET /api/session`: what the page needs to decide whether to ask for
@@ -210,6 +245,19 @@ pub async fn login(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_basic_passwords() {
+        let mut h = HeaderMap::new();
+        // "x:secret word"
+        h.insert(
+            header::AUTHORIZATION,
+            "Basic eDpzZWNyZXQgd29yZA==".parse().unwrap(),
+        );
+        assert_eq!(basic_password(&h).as_deref(), Some("secret word"));
+        h.insert(header::AUTHORIZATION, "Bearer x".parse().unwrap());
+        assert_eq!(basic_password(&h), None);
+    }
 
     #[test]
     fn reads_cookies() {

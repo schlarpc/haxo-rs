@@ -4,6 +4,7 @@
 //! through BlueZ over D-Bus, and settings that outlive a boot through
 //! `haxophone-config`, which edits the settings file on the card.
 
+mod audio;
 mod auth;
 mod bluetooth;
 mod error;
@@ -32,6 +33,9 @@ pub struct Args {
     /// haxo001's control socket.
     #[arg(long, default_value = "/run/haxo/control.sock")]
     pub control_socket: PathBuf,
+    /// haxo001's audio tap.
+    #[arg(long, default_value = "/run/haxo/audio.sock")]
+    pub audio_socket: PathBuf,
     /// The settings helper's socket (`haxophone-config serve`).
     #[arg(long, default_value = "/run/haxophone-config/settings.sock")]
     pub settings_socket: PathBuf,
@@ -54,6 +58,7 @@ pub struct Args {
 pub struct App {
     pub args: Args,
     pub live: live::Live,
+    pub audio: audio::Audio,
     pub auth: auth::Auth,
     pub sf2: sf2::Cache,
     pub dbus: tokio::sync::OnceCell<zbus::Connection>,
@@ -91,6 +96,7 @@ async fn main() -> std::io::Result<()> {
     let listen = args.listen;
     let app: State = Arc::new(App {
         live: live::Live::start(args.control_socket.clone()),
+        audio: audio::Audio::start(args.audio_socket.clone()),
         auth: auth::Auth::new(&args.usb_interface),
         sf2: sf2::Cache::default(),
         dbus: tokio::sync::OnceCell::new(),
@@ -99,6 +105,8 @@ async fn main() -> std::io::Result<()> {
 
     let api = Router::new()
         .route("/live", get(live::websocket))
+        .route("/audio", get(audio::websocket))
+        .route("/stream.wav", get(audio::wav))
         .route("/wifi", get(wifi::status))
         .route("/wifi/scan", post(wifi::scan))
         .route("/wifi/connect", post(wifi::connect))
