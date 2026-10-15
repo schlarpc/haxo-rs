@@ -224,7 +224,9 @@ Checked on the board over Wi-Fi: both answer 409.
 | Call | Body / result |
 |---|---|
 | `GET /api/bluetooth` | `{ adapter: {powered, name, address, discoverable}, paired: [{address, name, connected, codec, audio}] }` |
-| `POST /api/bluetooth/scan` | `[{ address, name, codecs, audio }]`, ~10 s discovery |
+| `POST /api/bluetooth/scan` | starts (or restarts) a 30 s discovery in the background; returns the status below |
+| `GET /api/bluetooth/scan` | `{ scanning, devices: [{ address, name, codecs, audio }] }` found so far, named and audio devices first; the page polls it |
+| `DELETE /api/bluetooth/scan` | stops early (within a second) |
 | `POST /api/bluetooth/{addr}/pair` | pairs, trusts, connects |
 | `POST /api/bluetooth/{addr}/connect`, `/disconnect` | |
 | `DELETE /api/bluetooth/{addr}` | removes the pairing |

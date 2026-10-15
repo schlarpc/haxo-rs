@@ -31,10 +31,10 @@ Roughly in order. Details are in the sections named.
    - Record what happened in "Layout", and drop its "untested" notes.
 2. **USB gadget stalls** under sustained bulk transfers ("Open issue"):
    reproduce over Wi-Fi with the kernel log live.
-3. **Bluetooth audio with a real speaker** ("Audio out"): the chain runs
-   and the board is source-only, but nothing has played through it yet.
-   Pair a speaker from the web UI, measure latency per codec and CPU next
-   to haxo, listen for radio noise.
+3. **Bluetooth audio with a real speaker** ("Audio out"): it played into
+   the DEWALT until WirePlumber was killed. Play for minutes, see whether
+   WirePlumber survives, then measure latency per codec and CPU next to
+   haxo, and listen for radio noise.
 4. **haxo-rs patches** ("Patches to make"), each reproduced and measured
    on the board first ("Upstream issues"). What's left there needs someone
    playing (idle wake-up, BLE MIDI from a phone, the pressure spikes) or
@@ -655,21 +655,36 @@ the buffering error): the web UI, USB audio (UAC2) and Bluetooth (through
 PipeWire's ALSA plugin, in the haxophone user's session) are listeners.
 
 - **USB audio, verified 2026-10-15 from bagel** (`arecord` on the
-  Haxophone card): the bridge plays exactly while the host records (the
-  gadget refuses writes with EIO otherwise, the waiting state), stays at
-  36 to 44 ms buffered with the ratio within a few hundred ppm, and
+  Haxophone card): the bridge plays exactly while the host records, stays
+  at 36 to 44 ms buffered with the ratio within a few hundred ppm, and
   survives haxo restarting (back within a second). haxo's startup (the
   soundfont load and mlockall) costs about 10 s of uneven delivery
   (191 underruns filled with silence, 103 ms dropped), then clean. Runs
   at SCHED_FIFO 10, below the instrument's threads. Bench-tested first on
   bagel into snd-aloop: 34 s of a sine with no gap or discontinuity.
-- **Bluetooth audio, not yet heard.** The board offers the A2DP source
-  role only (WirePlumber `bluez5.roles`): with every role, bagel paired
-  as a source and streamed into the board. Pairing from the web UI's
-  scan and pair worked (bagel found, flagged as audio, paired over
-  BR/EDR), but bagel's desktop PipeWire registered no sink endpoint
-  (likely its seat monitoring, the session being inactive), so nothing
-  has played through it. Needs a real speaker.
+- **Waiting without churn.** The idle gadget takes writes and a start,
+  and then never consumes (only a write that waits on it fails, EIO).
+  So the bridge keeps the device open and once a second plays a period
+  of silence, looks whether any of it went, and connects to the tap only
+  once it does. An earlier version reopened everything each second: a
+  tap listener coming and going, and through PipeWire a client and node
+  built and torn down, which kept WirePlumber at ~10% CPU while idle.
+- **Bluetooth audio played, briefly, 2026-10-15** (DEWALT WEARABLE
+  SPEAKER, found by the 30 s live scan). The board offers the A2DP source
+  role only (WirePlumber `bluez5.roles`; with every role, bagel paired as
+  a source and streamed into the board). Two fixes on the way:
+  - The bridge steered on `snd_pcm_delay`, which through PipeWire
+    includes the codec and the link (100 ms and more), so it dropped all
+    its input as "too much". It steers on its own ALSA buffer now
+    (buffer minus `avail`); it then held 36 to 54 ms.
+  - With no speaker connected WirePlumber fails a stream (ENOENT, "no
+    target node available"), and the bridge reopened it every second.
+    `node.linger = true` (`PIPEWIRE_PROPS` in the unit) makes it wait.
+  - After ~30 s of playing, WirePlumber was SIGKILLed with no log of why
+    (no OOM, no watchdog): most likely RLIMIT_RTTIME (200 ms, from rtkit)
+    on its realtime thread, under the churn above and a board short of
+    memory. Dropping it dropped the speaker. Watch for it again now that
+    the churn is gone.
 - The startup tune reaches listeners too: the tap starts before the
   synth.
 
