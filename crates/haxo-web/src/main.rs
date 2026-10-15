@@ -61,6 +61,7 @@ pub struct App {
     pub audio: audio::Audio,
     pub auth: auth::Auth,
     pub sf2: sf2::Cache,
+    pub scan: bluetooth::Scan,
     pub dbus: tokio::sync::OnceCell<zbus::Connection>,
 }
 
@@ -99,6 +100,7 @@ async fn main() -> std::io::Result<()> {
         audio: audio::Audio::start(args.audio_socket.clone()),
         auth: auth::Auth::new(&args.usb_interface),
         sf2: sf2::Cache::default(),
+        scan: bluetooth::Scan::default(),
         dbus: tokio::sync::OnceCell::new(),
         args,
     });
@@ -112,7 +114,12 @@ async fn main() -> std::io::Result<()> {
         .route("/wifi/connect", post(wifi::connect))
         .route("/wifi/saved/{ssid}", delete(wifi::forget))
         .route("/bluetooth", get(bluetooth::status).patch(bluetooth::set))
-        .route("/bluetooth/scan", post(bluetooth::scan))
+        .route(
+            "/bluetooth/scan",
+            post(bluetooth::scan)
+                .get(bluetooth::scan_status)
+                .delete(bluetooth::scan_stop),
+        )
         .route("/bluetooth/{addr}/pair", post(bluetooth::pair))
         .route("/bluetooth/{addr}/connect", post(bluetooth::connect))
         .route("/bluetooth/{addr}/disconnect", post(bluetooth::disconnect))

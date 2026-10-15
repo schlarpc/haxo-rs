@@ -700,6 +700,7 @@ function createMockApi() {
       { ssid: "NETGEAR48", signal: -83, security: "WPA2" },
     ],
   };
+  const btScan = { started: 0, until: 0 };
   const bt = {
     adapter: { powered: true, name: "haxophone", address: "B8:27:EB:4A:91:0C", discoverable: false },
     paired: [{ address: "F8:5C:7D:12:40:9E", name: "JBL Flip 6", connected: true, codec: "SBC-XQ" }],
@@ -756,7 +757,15 @@ function createMockApi() {
     // GET /api/bluetooth, POST /api/bluetooth/scan, POST .../:addr/{pair,connect,disconnect}, DELETE .../:addr
     bluetooth: {
       async status() { await sleep(120); return copy({ adapter: bt.adapter, paired: bt.paired }); },
-      async scan() { await sleep(2200); return copy(bt.nearby.filter((n) => !bt.paired.some((p) => p.address === n.address))); },
+      // A scan reveals one device a second, like the board's live scan.
+      async scan() { btScan.started = performance.now(); btScan.until = btScan.started + 8000; return this.scanStatus(); },
+      async scanStatus() {
+        await sleep(80);
+        const now = performance.now(), shown = Math.floor((now - btScan.started) / 1000);
+        const left = bt.nearby.filter((n) => !bt.paired.some((p) => p.address === n.address));
+        return { scanning: now < btScan.until, devices: copy(left.slice(0, Math.max(0, shown))) };
+      },
+      async stopScan() { btScan.until = performance.now(); },
       async pair(address) {
         await sleep(2000);
         const d = bt.nearby.find((n) => n.address === address);
@@ -859,6 +868,8 @@ function createRealApi() {
     bluetooth: {
       status: () => call("GET", "/bluetooth"),
       scan: () => call("POST", "/bluetooth/scan"),
+      scanStatus: () => call("GET", "/bluetooth/scan"),
+      stopScan: () => call("DELETE", "/bluetooth/scan"),
       pair: (address) => call("POST", `/bluetooth/${enc(address)}/pair`),
       setConnected: (address, on) => call("POST", `/bluetooth/${enc(address)}/${on ? "connect" : "disconnect"}`),
       remove: (address) => call("DELETE", "/bluetooth/" + enc(address)),
@@ -1465,7 +1476,7 @@ $("#wifi-scan").addEventListener("click", async () => {
 
 /* ------------------------------------------------------------------ */
 /* Bluetooth */
-const btUi = { nearby: null, scanning: false, busy: null };
+const btUi = { nearby: null, scanning: false, busy: null, showUnnamed: false, poll: null };
 let btConnectedName = null;
 async function renderBt() {
   const st = await api.bluetooth.status();
@@ -1516,10 +1527,19 @@ async function renderBt() {
 }
 function renderBtNearby() {
   const box = $("#bt-nearby");
-  if (btUi.scanning) { box.replaceChildren(el("p", { class: "empty" }, el("span", { class: "spin" }), " Looking for speakers…")); return; }
-  if (!btUi.nearby) { box.replaceChildren(el("p", { class: "empty" }, "Scan to find devices in pairing mode.")); return; }
-  if (!btUi.nearby.length) { box.replaceChildren(el("p", { class: "empty" }, "Nothing new found. Is the speaker in pairing mode?")); return; }
-  box.replaceChildren(...btUi.nearby.map((d) =>
+  if (!btUi.nearby && !btUi.scanning) { box.replaceChildren(el("p", { class: "empty" }, "Scan to find devices in pairing mode.")); return; }
+  const all = btUi.nearby || [];
+  // Unnamed ones are mostly phones and tags with random addresses: folded.
+  const named = all.filter((d) => d.name), unnamed = all.filter((d) => !d.name);
+  const shown = btUi.showUnnamed ? all : named;
+  const head = btUi.scanning
+    ? el("p", { class: "empty" }, el("span", { class: "spin" }), all.length ? ` Still looking… ${all.length} found so far.` : " Looking for devices in pairing mode…")
+    : !all.length ? el("p", { class: "empty" }, "Nothing new found. Is the speaker in pairing mode?") : null;
+  const more = unnamed.length
+    ? el("button", { class: "btn small", onclick: () => { btUi.showUnnamed = !btUi.showUnnamed; renderBtNearby(); } },
+        btUi.showUnnamed ? "Hide unnamed devices" : `+${unnamed.length} unnamed device${unnamed.length === 1 ? "" : "s"}`)
+    : null;
+  box.replaceChildren(...[head].filter(Boolean), ...shown.map((d) =>
     el("div", { class: "item" },
       el("span", { class: "glyph" }, "♪"),
       el("div", {}, el("div", { class: "name" }, d.name || "Unnamed device"),
@@ -1537,15 +1557,24 @@ function renderBtNearby() {
               }
               renderBt();
             } }, "Pair")),
-    )));
+    )), ...[more].filter(Boolean));
+}
+// The scan runs on the board for about 30 s; the page asks what it has
+// found so far, and shows devices as they appear.
+function scanned(st) {
+  if (!st) return;
+  btUi.nearby = st.devices;
+  btUi.scanning = st.scanning;
+  $("#bt-scan").textContent = st.scanning ? "Stop" : "Scan";
+  if (!st.scanning) { clearInterval(btUi.poll); btUi.poll = null; }
+  renderBtNearby();
 }
 $("#bt-scan").addEventListener("click", async () => {
-  btUi.scanning = true; renderBtNearby();
-  $("#bt-scan").disabled = true;
-  btUi.nearby = (await attempt(() => api.bluetooth.scan())) || btUi.nearby;
-  btUi.scanning = false;
-  $("#bt-scan").disabled = false;
-  renderBtNearby();
+  if (btUi.scanning) { await attempt(() => api.bluetooth.stopScan()); return; }
+  btUi.nearby = [];
+  scanned(await attempt(() => api.bluetooth.scan()));
+  clearInterval(btUi.poll);
+  btUi.poll = setInterval(async () => scanned(await attempt(() => api.bluetooth.scanStatus())), 1200);
 });
 
 /* ------------------------------------------------------------------ */

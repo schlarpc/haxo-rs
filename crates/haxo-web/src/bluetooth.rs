@@ -2,8 +2,9 @@
 // (speakers for audio out, and phones or computers using the instrument's
 // Bluetooth MIDI), scanning and pairing. haxo001 registers the pairing
 // agent when its Bluetooth MIDI is on.
-use std::collections::HashMap;
-use std::time::Duration;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Path as UrlPath, State};
 use axum::http::StatusCode;
@@ -17,7 +18,8 @@ use crate::error::{Error, Result};
 
 const BLUEZ: &str = "org.bluez";
 const ADAPTER: &str = "/org/bluez/hci0";
-const SCAN_TIME: Duration = Duration::from_secs(10);
+const SCAN_TIME: Duration = Duration::from_secs(30);
+const SCAN_POLL: Duration = Duration::from_secs(1);
 // Audio sinks (A2DP), so a scan can say which devices take audio.
 const A2DP_SINK: &str = "0000110b-0000-1000-8000-00805f9b34fb";
 
@@ -39,7 +41,7 @@ pub struct Device {
     audio: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct Found {
     address: String,
     name: Option<String>,
@@ -149,18 +151,44 @@ pub async fn status(State(app): State<crate::State>) -> Result<Json<Status>> {
     Ok(Json(Status { adapter, paired }))
 }
 
-/// `POST /api/bluetooth/scan`: about 10 s of discovery, then the unpaired
-/// devices found, named ones first.
-pub async fn scan(State(app): State<crate::State>) -> Result<Json<Vec<Found>>> {
-    let conn = app.system_bus().await?;
-    let a = proxy(conn, ADAPTER, "org.bluez.Adapter1").await?;
-    a.call_method("StartDiscovery", &()).await?;
-    tokio::time::sleep(SCAN_TIME).await;
-    // Read them before stopping: BlueZ drops RSSI, which marks the devices
-    // seen in this scan, when discovery stops.
-    let seen = devices(conn).await;
-    let _ = a.call_method("StopDiscovery", &()).await;
-    let mut found: Vec<Found> = seen?
+/// A scan in the background: discovery runs for SCAN_TIME (restarted by
+/// another POST, ended early by DELETE), and what it finds is collected as
+/// it comes, so the page shows devices while it's still looking.
+#[derive(Default)]
+pub struct Scan {
+    state: Mutex<ScanState>,
+}
+
+#[derive(Default)]
+struct ScanState {
+    until: Option<Instant>,
+    running: bool,
+    seen: BTreeMap<String, Found>,
+}
+
+#[derive(Serialize)]
+pub struct ScanStatus {
+    scanning: bool,
+    devices: Vec<Found>,
+}
+
+fn status_of(scan: &Scan) -> ScanStatus {
+    let st = scan.state.lock().unwrap();
+    let mut devices: Vec<Found> = st.seen.values().cloned().collect();
+    devices.sort_by(|a, b| {
+        (a.name.is_none(), !a.audio, &a.name).cmp(&(b.name.is_none(), !b.audio, &b.name))
+    });
+    ScanStatus {
+        scanning: st.running,
+        devices,
+    }
+}
+
+// Devices seen in this discovery (BlueZ sets RSSI on those) that aren't
+// paired yet.
+async fn found_now(conn: &zbus::Connection) -> Result<Vec<Found>> {
+    Ok(devices(conn)
+        .await?
         .into_iter()
         .filter(|(_, p)| !prop::<bool>(p, "Paired").unwrap_or(false))
         .filter(|(_, p)| p.contains_key("RSSI"))
@@ -171,11 +199,67 @@ pub async fn scan(State(app): State<crate::State>) -> Result<Json<Vec<Found>>> {
             codecs: Vec::new(),
             audio: is_audio(&p),
         })
-        .collect();
-    found.sort_by(|a, b| {
-        (a.name.is_none(), !a.audio, &a.name).cmp(&(b.name.is_none(), !b.audio, &b.name))
-    });
-    Ok(Json(found))
+        .collect())
+}
+
+async fn run_scan(app: crate::State) {
+    let result: Result<()> = async {
+        let conn = app.system_bus().await?;
+        let a = proxy(conn, ADAPTER, "org.bluez.Adapter1").await?;
+        a.call_method("StartDiscovery", &()).await?;
+        loop {
+            tokio::time::sleep(SCAN_POLL).await;
+            let found = found_now(conn).await.unwrap_or_default();
+            let done = {
+                let mut st = app.scan.state.lock().unwrap();
+                for f in found {
+                    st.seen.insert(f.address.clone(), f);
+                }
+                st.until.map_or(true, |u| Instant::now() >= u)
+            };
+            if done {
+                break;
+            }
+        }
+        let _ = a.call_method("StopDiscovery", &()).await;
+        Ok(())
+    }
+    .await;
+    if let Err(e) = result {
+        log::warn!("Bluetooth scan: {}", e.message);
+    }
+    app.scan.state.lock().unwrap().running = false;
+}
+
+/// `POST /api/bluetooth/scan`: start (or restart) a scan of SCAN_TIME.
+pub async fn scan(State(app): State<crate::State>) -> Result<Json<ScanStatus>> {
+    let start = {
+        let mut st = app.scan.state.lock().unwrap();
+        st.until = Some(Instant::now() + SCAN_TIME);
+        if st.running {
+            false
+        } else {
+            st.running = true;
+            st.seen.clear();
+            true
+        }
+    };
+    if start {
+        tokio::spawn(run_scan(app.clone()));
+    }
+    Ok(Json(status_of(&app.scan)))
+}
+
+/// `GET /api/bluetooth/scan`: whether it's still scanning, and what it
+/// has found so far, named and audio devices first.
+pub async fn scan_status(State(app): State<crate::State>) -> Json<ScanStatus> {
+    Json(status_of(&app.scan))
+}
+
+/// `DELETE /api/bluetooth/scan`: stop early (within a second).
+pub async fn scan_stop(State(app): State<crate::State>) -> StatusCode {
+    app.scan.state.lock().unwrap().until = Some(Instant::now());
+    StatusCode::NO_CONTENT
 }
 
 fn bluez_error(what: &str, e: zbus::Error) -> Error {
