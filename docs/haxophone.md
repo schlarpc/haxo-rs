@@ -545,9 +545,9 @@ large copies off the stall-prone USB link.
 
 ## Bluetooth (nixos/bluetooth.nix, 2026-10-13)
 
-Step 2 of the Outputs build order, configured but not yet run on the board:
-BlueZ, plus PipeWire with its Bluetooth audio support, so a speaker can be
-paired and the chain measured. Nothing in haxo-rs feeds it audio yet.
+BlueZ, plus PipeWire with its Bluetooth audio support, which haxo-bridge
+feeds (see "Audio out"; the board is an A2DP source only). Not yet heard
+through a real speaker.
 haxo-rs serves Bluetooth MIDI itself (`--ble-midi haxophone`, 193ea18), so
 BlueZ's MIDI plugin is disabled, and so is PipeWire's BLE MIDI server
 (`monitor.bluez-midi`); see "Patches to make" for why.

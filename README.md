@@ -8,7 +8,8 @@ Raspberry Pi Zero 2 W. Design notes and decisions: [docs/haxophone.md](docs/haxo
 | `nixos/configuration.nix` | The host: haxo-rs service, networking, consoles |
 | `nixos/boot.nix` | Pi firmware -> U-Boot -> extlinux, mainline kernel, HAT overlay |
 | `nixos/storage.nix`, `nixos/disko.nix` | SD layout: FAT /boot, btrfs `/nix` + `/persist`, tmpfs root |
-| `nixos/gadget.nix` | USB gadget: NCM network, ACM console, MIDI, MTP |
+| `nixos/gadget.nix` | USB gadget: NCM network, USB audio (UAC2), MIDI, MTP |
+| `nixos/audio-out.nix` | haxo-bridge: the instrument's sound to USB audio and Bluetooth |
 | `nixos/wifi.nix` | iwd + networkd + Avahi |
 | `nixos/bluetooth.nix` | BlueZ + PipeWire for Bluetooth audio out (not fed yet) |
 | `nixos/config-file.nix` | Applies `config/haxophone.toml` from the card at boot |
@@ -67,8 +68,9 @@ On the board, after `sudo $EDITOR /boot/config/haxophone.toml`:
 `sudo systemctl restart haxophone-config iwd`. To check a file elsewhere:
 `nix run .#haxophone-config -- check haxophone.toml`.
 
-With no usable key, log in on the USB serial console (`ttyGS0`) or the
-mini UART: both autologin.
+With no usable key, log in on the mini UART console (GPIO 14/15), which
+autologins. The USB serial console made way for USB audio; it comes back
+only in the g_cdc fallback, when the composite gadget fails to bind.
 
 ## Deploying
 
