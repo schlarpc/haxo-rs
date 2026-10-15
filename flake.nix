@@ -103,6 +103,10 @@
           craneLib = inputs.crane.mkLib pkgs;
           src = inputs.haxo-rs;
         };
+        haxo-bridge = pkgs.callPackage ./packages/haxo-bridge.nix {
+          craneLib = inputs.crane.mkLib pkgs;
+          src = inputs.haxo-rs;
+        };
         umtprd = pkgs.callPackage ./packages/umtprd.nix { };
         haxophone-config = pkgs.callPackage ./packages/haxophone-config { };
         mint-sd = pkgs.callPackage ./packages/mint-sd.nix {

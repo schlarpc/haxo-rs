@@ -2,12 +2,11 @@
 # and decisions are in docs/haxophone.md.
 #
 # Reached over the one USB cable to the host, which also powers the board
-# and carries the composite gadget (gadget.nix): NCM network, ACM serial
-# console (ttyGS0), USB MIDI and MTP. The mini UART on GPIO 14/15 is a
-# second console, and Wi-Fi (wifi.nix) a way in that doesn't share the USB
-# link. Audio comes from our own device tree overlay (haxophone-hat.dts)
-# and haxo-rs as a service. Bluetooth and PipeWire are up for audio out
-# (bluetooth.nix), but nothing feeds them yet.
+# and carries the composite gadget (gadget.nix): NCM network, USB audio
+# (UAC2), USB MIDI and MTP. The mini UART on GPIO 14/15 is the console, and
+# Wi-Fi (wifi.nix) a way in that doesn't share the USB link. Audio comes
+# from our own device tree overlay (haxophone-hat.dts) and haxo-rs as a
+# service; haxo-bridge copies it to USB audio and Bluetooth (audio-out.nix).
 {
   lib,
   pkgs,
@@ -47,6 +46,7 @@ in
     ./gadget.nix
     ./wifi.nix
     ./webui.nix
+    ./audio-out.nix
   ];
 
   nixpkgs.hostPlatform = "aarch64-linux";

@@ -28,7 +28,7 @@
   users.mutableUsers = false;
   # No password and no ssh key in the config, which NixOS takes for a
   # lockout. The keys come from the card at boot (config-file.nix), and the
-  # consoles (USB serial, mini UART) autologin.
+  # console (mini UART; USB serial in the g_cdc fallback) autologins.
   users.allowNoPasswordLogin = true;
 
   # The instrument's own user rather than a personal one. Its ssh keys come

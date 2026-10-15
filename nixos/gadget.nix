@@ -1,12 +1,14 @@
 # The composite USB gadget on the Zero 2 W's OTG port, built through configfs:
 #
 #   NCM  network (usb0)            2 IN + 1 OUT endpoints
-#   ACM  serial console (ttyGS0)   2 IN + 1 OUT
+#   UAC2 the instrument's sound    1 IN
 #   MIDI the instrument, for DAWs  1 IN + 1 OUT
 #   MTP  file access (umtprd)      2 IN + 1 OUT
 #
-# 7 IN + 4 OUT, which is exactly the dwc2 core's 7 IN endpoints (verified on
-# the board, docs/haxophone.md "USB gadget endpoint budget").
+# 6 IN + 3 OUT of the dwc2 core's 7 IN (verified on the board,
+# docs/haxophone.md "USB gadget endpoint budget"). The ACM serial console
+# (2 IN + 1 OUT) made way for UAC2: SSH over NCM and the mini UART console
+# remain.
 #
 # Ordering: MTP is a FunctionFS function, and a gadget with an FFS function
 # can only bind to the UDC after the daemon has written its descriptors.
@@ -98,14 +100,26 @@ let
 
     mkdir configs/c.1
     mkdir configs/c.1/strings/0x409
-    echo "NCM + ACM + MIDI + MTP" > configs/c.1/strings/0x409/configuration
+    echo "NCM + UAC2 + MIDI + MTP" > configs/c.1/strings/0x409/configuration
     echo 250 > configs/c.1/MaxPower
 
     mkdir functions/ncm.usb0
     echo ${hostMac} > functions/ncm.usb0/host_addr
     echo ${devMac} > functions/ncm.usb0/dev_addr
 
-    mkdir functions/acm.GS0
+    # USB audio, device to host only: a sound card hosts record the
+    # instrument from (haxo-bridge feeds it from haxo's audio tap). No
+    # capture side, mute or volume, so one isochronous IN endpoint.
+    mkdir functions/uac2.usb0
+    echo 3 > functions/uac2.usb0/p_chmask
+    echo 48000 > functions/uac2.usb0/p_srate
+    echo 2 > functions/uac2.usb0/p_ssize
+    echo 0 > functions/uac2.usb0/c_chmask
+    echo 0 > functions/uac2.usb0/p_mute_present
+    echo 0 > functions/uac2.usb0/p_volume_present
+    echo 0 > functions/uac2.usb0/c_mute_present
+    echo 0 > functions/uac2.usb0/c_volume_present
+    echo Haxophone > functions/uac2.usb0/function_name
 
     mkdir functions/midi.usb0
     # ALSA card id on this side, and the port name hosts show.
@@ -116,7 +130,7 @@ let
     mkdir functions/ffs.mtp
 
     ln -s functions/ncm.usb0 configs/c.1/
-    ln -s functions/acm.GS0 configs/c.1/
+    ln -s functions/uac2.usb0 configs/c.1/
     ln -s functions/midi.usb0 configs/c.1/
     ln -s functions/ffs.mtp configs/c.1/
 
@@ -153,7 +167,7 @@ in
   ];
 
   systemd.services.usb-gadget = {
-    description = "USB gadget (NCM, ACM, MIDI, MTP)";
+    description = "USB gadget (NCM, UAC2, MIDI, MTP)";
     wantedBy = [ "multi-user.target" ];
     after = [ "sys-kernel-config.mount" ];
     requires = [ "sys-kernel-config.mount" ];
@@ -215,15 +229,12 @@ in
         teardown
         "${pkgs.kmod}/bin/modprobe g_cdc host_addr=${hostMac} dev_addr=${devMac}"
       ];
+      # g_cdc has a serial port; the composite gadget doesn't any more.
+      # Give it its console (autologin, configuration.nix).
+      ExecStartPost = "-${pkgs.systemd}/bin/systemctl start --no-block serial-getty@ttyGS0.service";
     };
   };
 
   # Group haxo-web, setgid: the web UI (webui.nix) uploads soundfonts here.
   systemd.tmpfiles.rules = [ "d ${mtpRoot} 2775 root haxo-web -" ];
-
-  # Login on the USB serial console (autologin is set in configuration.nix).
-  systemd.services."serial-getty@ttyGS0" = {
-    wantedBy = [ "multi-user.target" ];
-    after = [ "usb-gadget-bind.service" ];
-  };
 }
