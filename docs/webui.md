@@ -5,8 +5,8 @@ http://haxophone.local over Wi-Fi. It shows the instrument live and
 changes Wi-Fi, Bluetooth and sounds.
 
 - **Server:** `haxo-web`, a second binary in the haxo-rs workspace
-  (`crates/haxo-web` in our fork). Rust: axum, tokio on one thread, zbus
-  for D-Bus. Packaged in `packages/haxo-web.nix`, run by `nixos/webui.nix`.
+  (`crates/haxo-web`). Rust: axum, tokio on one thread, zbus
+  for D-Bus. Packaged in `nix/packages/haxo-web.nix`, run by `nix/nixos/webui.nix`.
 - **Page:** `crates/haxo-web/ui/index.html`, embedded in the binary. It is one
   self-contained file: no build step, no CDN at runtime (B612 from Google
   Fonts when reachable, system faces otherwise), because the board is often
@@ -67,7 +67,7 @@ make browsers show their own login box over the page's.
 haxo-web runs as its own user, `haxo-web`, with one capability
 (CAP_NET_BIND_SERVICE, for port 80) and systemd's sandboxing
 (ProtectSystem=strict, NoNewPrivileges, a syscall filter...). What it
-needs beyond that is granted narrowly (nixos/webui.nix):
+needs beyond that is granted narrowly (nix/nixos/webui.nix):
 
 - haxo001's sockets: haxo runs as root with `Group=haxo` and `UMask=0007`,
   so they come out `root:haxo` 0770; haxo-web is in `haxo`.

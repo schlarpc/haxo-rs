@@ -1,100 +1,126 @@
-![main workflow](https://github.com/cardonabits/haxo-rs/actions/workflows/haxo-rpiz.yml/badge.svg)
-## Table of Contents
+# haxo-rs
 
-<!-- toc -->
+The software for a [Haxophone](https://github.com/cardonabits/haxo-hw), a
+digital saxophone HAT, on a Raspberry Pi Zero 2 W: the firmware that turns
+key presses and breath into music, and the NixOS system that runs it. One
+flake builds both, and mints an SD card that boots straight into it.
 
-- [What is haxo-rs?](#what-is-haxo-rs)
-- [Required System Configuration](#required-system-configuration)
-  * [Hardware](#hardware)
-  * [Overlay Filesystem](#overlay-filesystem)
-  * [I2C](#i2c)
-  * [Sound Card](#sound-card)
-- [Software Development Setup](#software-development-setup)
-  * [Package dependencies](#package-dependencies)
-- [Running the code](#running-the-code)
-  * [Logging](#logging)
-- [Testing](#testing)
-- [Running on boot](#running-on-boot)
+This is a fork of [cardonabits/haxo-rs](https://github.com/cardonabits/haxo-rs).
+Design notes and decisions: [docs/haxophone.md](docs/haxophone.md); the web
+UI: [docs/webui.md](docs/webui.md).
 
-<!-- tocstop -->
+| Path | What |
+|---|---|
+| `src/` | haxo001, the instrument: key scan, breath sensor, fluidsynth, MIDI out, Bluetooth MIDI |
+| `crates/haxo-web` | The web UI's server; the page is `ui/index.html` |
+| `crates/haxo-bridge` | Plays haxo001's audio tap into USB audio and Bluetooth |
+| `crates/haxo-control` | The control-socket protocol haxo001 and haxo-web share |
+| `nix/nixos/configuration.nix` | The host: the haxo service, networking, consoles |
+| `nix/nixos/boot.nix` | Pi firmware -> U-Boot -> extlinux, mainline kernel, HAT overlay |
+| `nix/nixos/storage.nix`, `nix/nixos/disko.nix` | SD layout: FAT /boot, btrfs `/nix` + `/persist`, tmpfs root |
+| `nix/nixos/gadget.nix` | USB gadget: NCM network, USB audio (UAC2), MIDI, MTP |
+| `nix/nixos/audio-out.nix` | haxo-bridge: the instrument's sound to USB audio and Bluetooth |
+| `nix/nixos/wifi.nix` | iwd + networkd + Avahi |
+| `nix/nixos/bluetooth.nix` | BlueZ + PipeWire for Bluetooth audio out |
+| `nix/nixos/config-file.nix` | Applies `config/haxophone.toml` from the card at boot |
+| `nix/nixos/webui.nix` | The web UI on port 80 |
+| `nix/overlay.nix`, `nix/packages/` | The packages: haxo-rs, haxo-web, haxo-bridge, umtprd, the settings tool, the minting app |
 
-## What is haxo-rs?
+`nix develop` provides cargo with the C libraries, and `deploy`.
 
-haxo-rs is a the application that runs on a
-[haxophone](https://github.com/jcard0na/haxo-hw/) to convert key presses into
-music.
+## Minting an SD card
 
-The application is written in [Rust](https://www.rust-lang.org/).  It compiles
-and runs on a Raspberry Pi.
+On an x86_64 NixOS machine with aarch64 emulation
+(`boot.binfmt.emulatedSystems = [ "aarch64-linux" ]` with
+`preferStaticEmulators = true`; the install activates the aarch64 system in
+a chroot), with the card in a USB reader:
 
-## Required System Configuration
-
-### Hardware
-
-The Raspberry Pi needs to have a Haxophone HAT attached to it.
-
-### Overlay Filesystem
-
-For reliability, we recommend keeping the root file system as read-only on the
-SD card, and keep your software development limited to separate (writable) USB
-drive.
-
-This can be configured via `raspi-config`.
-
-### I2C
-
-You need to enable I2C on your Raspberry Pi.  The recommended and easiest way
-to do that with with `raspi-config`.
-
-### Sound Card
-
-To use the audio codec on the Haxo HAT, you need to load the `max98357a` driver.
-You can do that by editing `/boot/firmware/config.txt` as shown below
-
-```
-# Enable audio (loads snd_bcm2835)
-# dtparam=audio=on
-dtoverlay=max98357a
+```sh
+nix run .#mint-sd -- --ssh-keys ~/.ssh/id_ed25519.pub /dev/disk/by-id/usb-<reader>-0:0
 ```
 
-## Software Development Setup
+It builds the system, asks for sudo, and asks before it wipes the card. Then
+it partitions and formats the card (disko), puts the host key and a
+machine-id on `/persist`, installs the system with its firmware, U-Boot and
+extlinux.conf, and writes the settings file. The card boots straight into
+the configured system.
 
-Software is developed on a headless (i.e. no display) Raspberry Pi.  The
-development host runs VSCode and connects to the headless Pi over ssh.
+Options:
+- `--ssh-keys FILE`: public keys that may log in, from a `.pub` or an
+  `authorized_keys` file. Repeatable.
+- `--config FILE`: a complete `haxophone.toml` (keys and Wi-Fi) instead of
+  the template. It is checked before the card is touched.
+- `--host-key FILE`: the board's ssh host key, so its fingerprint stays the
+  same across a reflash. Without it a new key is generated. From a running
+  board: `ssh haxophone@haxophone.local sudo cat /etc/ssh/ssh_host_ed25519_key > key`.
 
-The diagram below shows the development setup we use on the Pi Zero.  On the
-RP3 or 4 the setup is simpler as it has built-in USB and Ethernet.
+## Settings: `config/haxophone.toml`
 
-![devel setup](docs/images/haxo-devel-setup-simple.svg)
+The settings that belong to whoever has the instrument live on the card's
+FAT partition, so any computer with a card reader can change them:
 
-An alternative setup could be to go full native on the Raspberry Pi, running
-your IDE there.
+```toml
+ssh_authorized_keys = [
+  "ssh-ed25519 AAAA... you@laptop",
+]
 
-### Package dependencies
+[[wifi]]
+ssid = "My Network"
+psk = "my passphrase"
 
-You will need to install fluidsynth and its development libraries
+[[wifi]]
+ssid = "Open Cafe"   # no psk: an open network
 ```
-apt install libfluidsynth-dev fluidsynth
+
+The board reads the file at every boot; removing an entry removes it.
+Mistakes are skipped with a message in `journalctl -u haxophone-config`.
+On the board, after `sudo $EDITOR /boot/config/haxophone.toml`:
+`sudo systemctl restart haxophone-config iwd`. To check a file elsewhere:
+`nix run .#haxophone-config -- check haxophone.toml`.
+
+With no usable key, log in on the mini UART console (GPIO 14/15), which
+autologins. The USB serial console made way for USB audio; it comes back
+only in the g_cdc fallback, when the composite gadget fails to bind.
+
+## Deploying
+
+```sh
+deploy .#haxophone
 ```
 
-## Running the code
+This goes over the USB gadget link (10.68.0.1). That link has stalled under
+large copies (docs/haxophone.md), so for big closures go over Wi-Fi:
+`deploy .#haxophone --hostname haxophone.local`. Changes to the USB gadget
+take effect at the next boot; a live rebind would cut the link deploy-rs is
+using.
 
-You can compile and run haxo-rs with `cargo`.
-```
-cd haxo-rs
-cargo run
+Commit (or at least `git add`) new files first: the flake sees only what
+git tracks. Uncommitted changes to tracked files are built as they are.
+
+`nix flake update` updates nixpkgs and the other inputs.
+
+## Working on the code
+
+The Rust packages build from the workspace alone (Cargo.toml, Cargo.lock,
+build.rs, `src/`, `crates/`, plus `notemap.json` and the startup tune), so a
+change to the NixOS modules or the docs rebuilds none of them. Their
+dependencies are built once per Cargo.lock.
+
+```sh
+nix build .#haxo-rs            # for this machine
+nix build .#packages.aarch64-linux.haxo-rs   # for the board
+nix develop -c cargo test -p haxo-web        # runs anywhere
 ```
 
 ### Logging
 
-The application uses [`env_logger`](https://docs.rs/env_logger/0.9.0/env_logger/) to produce logs.  You can enable debug logs as by setting the `RUST_LOG` environment variable, for instance:
-```
-RUST_LOG=debug cargo run
-```
+The programs use [`env_logger`](https://docs.rs/env_logger/0.9.0/env_logger/).
+The services run with `RUST_LOG=info`; set `RUST_LOG=debug` for more.
 
-## Testing
+### Testing on the board
 
-You can run unit tests with `cargo test -- --test-threads=1`.  The tests cannot run in parallel as they will collide accessing hardware resources (GPIO, I2C bus, etc.).  The option `--test-threads=1` disables parallel execution of tests and forces them to run sequentially.
+haxo001's unit tests drive the real GPIO, I2C and ALSA hardware, so they run
+on a Pi with the HAT, one at a time: `cargo test -- --test-threads=1`.
 
 ```
 running 8 tests
@@ -110,15 +136,12 @@ test pressure::tests::read_io ... ignored
 test result: ok. 5 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.02s
 ```
 
-Note that there are some ignored tests as well.  These are disabled by default
-because they require user input to pass.  But they are useful to test hardware
-(e.g. stuck keys, dead pressure sensor, etc.).  To run, enable standard output as:
+The ignored tests need someone at the instrument, and are useful to check
+the hardware (stuck keys, a dead pressure sensor). Run them with standard
+output:
 
 ```
-pi@raspberrypi-one:/media/usb/haxo-rs $ cargo test all_keys -- --nocapture --ignored
-    Finished test [unoptimized + debuginfo] target(s) in 0.16s
-     Running unittests (target/debug/deps/haxo001-c08e384db0cbfdd8)
-
+$ cargo test all_keys -- --nocapture --ignored
 running 1 test
 Press all the keys at least once, in any order...
 01/22: detected_keys: 400 keys: 400
@@ -127,20 +150,11 @@ Press all the keys at least once, in any order...
 21/22: detected_keys: 0 keys: 27773777
 22/22: detected_keys: 8 keys: 2777377f
 test keyscan::tests::all_keys ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 11.45s
 ```
 
-## Running on boot
+### Raspberry Pi OS
 
-If you followed the advice to keep the sd card read-only, you will need to make
-it writable before making the changes below.
-
-Now copy the haxo binary somewhere in your sd card and invoke it from `/etc/rc.local`.
-
-```
-cp /media/usb/haxo-rs/target/debug/haxo001 /usr/local/bin
-echo /usr/local/bin/haxo001 >> /etc/rc.local
-```
-
-Now you can write-protect the SD card again.
+Upstream's way of running haxo-rs, on Raspberry Pi OS, is still here:
+cross-compiling in `docker/`, the systemd units in `scripts/systemd/`, and
+the network setup in [docs/zero-setup.md](docs/zero-setup.md). See
+[upstream's README](https://github.com/cardonabits/haxo-rs#readme) for it.

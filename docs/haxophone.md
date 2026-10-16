@@ -5,9 +5,11 @@ NixOS for a Haxophone (digital saxophone HAT) on a Raspberry Pi Zero 2 W:
 antenna), one OTG-capable micro-USB port. This records the decisions made so
 far.
 
-Until 2026-10-13 the host lived in schlarpc-flake (`hosts/haxophone`, booted
-from nixpkgs' SD image). It moved to this repo with the storage layout
-below; the sections before "Layout" describe that bootstrap.
+Until 2026-10-13 the host booted from nixpkgs' SD image; the sections
+before "Layout" describe that bootstrap. Until 2026-10-15 the NixOS side
+was its own repository, haxo-nix, with this one as a flake input; it was
+merged in here, history and all, so the firmware and the OS that runs it
+ship together.
 
 ## TODO
 
@@ -48,7 +50,7 @@ Roughly in order. Details are in the sections named.
 7. **The web UI**'s remaining parts (docs/webui.md, "Open"), and the
    design brief handed to a design agent.
 
-## Bootstrap (schlarpc-flake hosts/haxophone, 2026-10-12)
+## Bootstrap (2026-10-12)
 
 nixpkgs' aarch64 SD image module with the mainline kernel (6.18, from
 cache.nixos.org; dwc2 is built in as dual-role, and MAX98357A and bcm2835 I2S
@@ -60,8 +62,7 @@ router or DNS) plus ACM serial (`ttyGS0`, autologin). The mini UART
 10.68.0.1. Only 376 MB of RAM is visible (MemTotal 385004 kB): the firmware's
 GPU memory split and the vc4 KMS driver's CMA take the rest; `gpu_mem=16`
 and dropping vc4 get most of it back. Throwaway: the btrfs/tmpfs layout and the rpi
-kernel (cross-built with ccacheStdenv like schlarpc-flake's hosts/devterm)
-replace it. (The rpi kernel part was later dropped: see "Kernel: mainline".)
+kernel (cross-built with ccacheStdenv) replace it. (The rpi kernel part was later dropped: see "Kernel: mainline".)
 
 Milestone (2026-10-13): playable on NixOS. Mainline kernel, our HAT
 overlay, haxo-rs with patches 0001-0002, deployed with deploy-rs over the
@@ -81,7 +82,7 @@ traffic, not a kernel hang. An earlier reading of the first incident as a
 hard hang was wrong: that boot's journal ends mid-play simply because
 nothing more was logged.
 
-Next: get in over Wi-Fi (nixos/wifi.nix) while the link is
+Next: get in over Wi-Fi (nix/nixos/wifi.nix) while the link is
 stalled and read the kernel log live. Suspects: dwc2 gadget DMA/FIFO
 handling on bcm2835 in mainline, NCM/ECM under load, power on the shared
 USB supply.
@@ -90,13 +91,13 @@ USB supply.
 
 What the "Decided" items below turned into. Not yet booted on the board.
 
-- **Partitions** (nixos/disko.nix): GPT, 512 MB FAT at /boot, btrfs for
+- **Partitions** (nix/nixos/disko.nix): GPT, 512 MB FAT at /boot, btrfs for
   the rest with subvolumes `/nix` and `/persist` (zstd, noatime). The FAT
   partition is also entry 1 of a hybrid MBR, type 0x0c: the BCM2837 boot
   ROM is Pi 3 class and reads only MBR. Untested on the board; if the
   firmware never starts (no activity LED, nothing on the mini UART), this is
   the first suspect.
-- **Boot chain** (nixos/boot.nix): nixos-hardware's Raspberry Pi firmware
+- **Boot chain** (nix/nixos/boot.nix): nixos-hardware's Raspberry Pi firmware
   module stages the GPU firmware, `u-boot.bin` (nixpkgs' rpi_3 build, which
   the bootstrap booted with) and config.txt onto /boot on every switch.
   config.txt is written in full, not on top of nixos-hardware's Raspberry Pi
@@ -104,8 +105,7 @@ What the "Decided" items below turned into. Not yet booted on the board.
   `gpu_mem=16`. U-Boot loads the generation's own device tree (FDTDIR), so
   the HAT overlay comes from `hardware.deviceTree`, never config.txt.
   `configurationLimit = 8` generations on the FAT partition.
-- **Root**: tmpfs, 128 MB. preservation (not impermanence; it is what
-  schlarpc-flake's newer hosts use) keeps machine-id, the ed25519 host key
+- **Root**: tmpfs, 128 MB. preservation (not impermanence) keeps machine-id, the ed25519 host key
   (symlinked from the initrd),
   /var/lib/{nixos,systemd,bluetooth,haxophone} and /home/haxophone. Only an
   ed25519 host key is generated: an RSA one would change on every boot.
@@ -119,9 +119,9 @@ What the "Decided" items below turned into. Not yet booted on the board.
   rebuilt every boot anyway. One user, `haxophone` (uid 1000), with
   autologin on the consoles; also the deploy user. Its ssh keys come from
   the card (see "Settings file"), not the flake.
-- **Nix**: stock nixpkgs Nix, not Determinate (which the schlarpc-flake
-  hosts get); nothing builds on the board.
-- **Minting** (packages/mint-sd.nix, see README.md): format the card in a
+- **Nix**: stock nixpkgs Nix, not Determinate; nothing builds on the
+  board.
+- **Minting** (nix/packages/mint-sd.nix, see README.md): format the card in a
   reader with the disko CLI, put the host key and machine-id on /persist,
   `nixos-install --system` the prebuilt closure, and write the settings
   file. Verified against a
@@ -151,8 +151,8 @@ What the "Decided" items below turned into. Not yet booted on the board.
   ready-made `max98357a` config.txt overlay; we write our own device tree
   overlay instead (`hardware.deviceTree.overlays`). PREEMPT_RT is a config
   option away on mainline if latency ever needs it.
-- **haxo-rs is ours to change**: our fork schlarpc/haxo-rs (upstream:
-  cardonabits/haxo-rs). See "Packaging haxo-rs".
+- **haxo-rs is ours to change**: this repository is our fork of
+  cardonabits/haxo-rs. See "Packaging haxo-rs".
 
 ## Outputs: IEM on the jack and Bluetooth for the crowd, at the same time
 
@@ -289,19 +289,24 @@ matter: the Zero 2 W's SD host runs well below 50 MB/s anyway.
 
 ## Packaging haxo-rs
 
-`packages/haxo-rs`, built with crane from the source-only `haxo-rs` flake
-input, which is our fork `github:schlarpc/haxo-rs` (clone in
-`~/src/haxo-rs`, with cardonabits as the `upstream` remote). Our changes are
-commits on the fork's `main`; `nix flake update haxo-rs` picks them up. To
-test unpushed work: `--override-input haxo-rs git+file:///home/schlarpc/src/haxo-rs`.
-Pull upstream fixes by merging or cherry-picking from `upstream/main`.
-crane vendors from the fork's Cargo.lock at eval time, so there is no
-cargoHash and no import-from-derivation. Built with `--features midi`.
+`nix/packages/haxo-rs` (and haxo-web, haxo-bridge beside it), built with
+crane from this repository's own Rust workspace: flake.nix hands the
+packages only Cargo.toml, Cargo.lock, build.rs, `src/`, `crates/` and the
+two files haxo001 installs, so a change to the NixOS modules or the docs
+rebuilds none of them. The version and `--version` carry that source's
+store hash (`src-<hash>`) rather than the commit, for the same reason.
+Dependencies are built once per Cargo.lock. crane vendors from Cargo.lock
+at eval time, so there is no cargoHash and no import-from-derivation. Built
+with `--features ble` (which pulls in `midi`).
+
+Our changes are commits on `main`. Pull upstream fixes by merging or
+cherry-picking from cardonabits/haxo-rs (add it as the `upstream` remote).
 
 Until 2026-10-13 the changes were `git format-patch` files in
 `packages/haxo-rs/patches` plus a replacement Cargo.lock; they are now the
 fork's first commits (cc0c336 through 9e06de6, source tree verified
-identical to the old patched source).
+identical to the old patched source). Until 2026-10-15 the system's flake
+took this repository as a source-only `haxo-rs` input.
 
 ## Upstream issues, diagnosed (2026-10-13)
 
@@ -512,7 +517,7 @@ compiled):
   bagel's "haxophone Bluetooth" sequencer port. The test bond was
   removed on both sides.
 
-## USB gadget (nixos/gadget.nix)
+## USB gadget (nix/nixos/gadget.nix)
 
 configfs composite: NCM (usb0, same fixed MACs and 10.68.0.1 DHCP setup),
 UAC2 (USB audio out, see "Audio out"; replaced the ACM serial console on
@@ -531,7 +536,7 @@ umtprd restart costs one re-enumeration. The gadget units are
 `restartIfChanged = false`; gadget changes take effect at the next boot,
 because a live rebind cuts the link deploy-rs is using.
 
-## Wi-Fi (nixos/wifi.nix)
+## Wi-Fi (nix/nixos/wifi.nix)
 
 iwd associates, networkd runs DHCP on wlan0, Avahi publishes
 haxophone.local. The networks come from the settings file on the card (next
@@ -543,7 +548,7 @@ handles that offload path, so it would likely work without the option
 Deploys can go over Wi-Fi (`deploy --hostname <wlan0 address>`), which keeps
 large copies off the stall-prone USB link.
 
-## Bluetooth (nixos/bluetooth.nix, 2026-10-13)
+## Bluetooth (nix/nixos/bluetooth.nix, 2026-10-13)
 
 BlueZ, plus PipeWire with its Bluetooth audio support, which haxo-bridge
 feeds (see "Audio out"; the board is an A2DP source only). Not yet heard
@@ -582,7 +587,7 @@ Bench test, to run on the board (record the numbers here):
 4. Listen for radio noise on the line out with Wi-Fi and Bluetooth both
    busy (upstream disables both radios).
 
-## Settings file (nixos/config-file.nix, packages/haxophone-config)
+## Settings file (nix/nixos/config-file.nix, nix/packages/haxophone-config)
 
 Decided 2026-10-13: nothing about who uses the instrument is in the flake.
 The ssh keys and Wi-Fi networks live in `config/haxophone.toml` on the FAT
@@ -643,7 +648,7 @@ and volume controls and async feedback, 3 IN): `p_chmask=3 p_srate=48000
 p_ssize=2 c_chmask=0`, no mute or volume. On the Pi it is ALSA card
 `UAC2Gadget`; hosts see "Haxophone", a 48 kHz stereo input. See "Audio out".
 
-## Audio out (nixos/audio-out.nix, 2026-10-15)
+## Audio out (nix/nixos/audio-out.nix, 2026-10-15)
 
 haxo001 renders through fluidsynth's callback driver and pushes a mono
 copy of every period into a wait-free ring; a tap thread serves it on
