@@ -14,10 +14,7 @@
   ...
 }:
 let
-  haxo-rs = pkgs.callPackage ../packages/haxo-rs {
-    craneLib = inputs.crane.mkLib pkgs;
-    src = inputs.haxo-rs;
-  };
+  haxo-rs = pkgs.haxo-rs;
 
   soundfontDir = "${pkgs.soundfont-generaluser-gs}/share/soundfonts";
   soundfont = "${soundfontDir}/GeneralUser-GS.sf2";
@@ -50,6 +47,8 @@ in
   ];
 
   nixpkgs.hostPlatform = "aarch64-linux";
+  # haxo-rs, haxo-web, haxo-bridge and the board tools (nix/overlay.nix).
+  nixpkgs.overlays = [ inputs.self.overlays.default ];
 
   # Upstream's service (scripts/systemd/haxo.service), minus its MIDI-only
   # gadget script: gadget.nix builds ours. Root for the GPIO and I2C

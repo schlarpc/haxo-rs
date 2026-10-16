@@ -10,7 +10,7 @@
 # reads MBR, so the firmware partition is also MBR entry 1, type 0x0c (FAT32
 # LBA). Linux and disko use the GPT, so mounts go by partlabel.
 #
-# A function so the minting app (packages/mint-sd.nix) can point it at the
+# A function so the minting app (nix/packages/mint-sd.nix) can point it at the
 # card reader with `disko --argstr device`. The installed system only uses it
 # for the mounts below, which don't depend on `device`.
 {

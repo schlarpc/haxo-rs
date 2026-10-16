@@ -1,9 +1,10 @@
-# haxo-rs, the Haxophone's firmware, built from our fork
-# (schlarpc/haxo-rs, forked from cardonabits/haxo-rs). Our changes are
-# commits there; see docs/haxophone.md "Patches to make".
+# haxo001, the Haxophone's firmware: this repository's root crate (our fork
+# of cardonabits/haxo-rs; see docs/haxophone.md "Patches to make").
 #
-# `src` is the `haxo-rs` flake input. crane vendors from the fork's
-# Cargo.lock; reading it from a flake input is not import-from-derivation.
+# `src` is the Rust workspace alone (flake.nix), so a change elsewhere in
+# the repository, the NixOS modules or the docs, rebuilds nothing. crane
+# vendors from its Cargo.lock; reading that from the flake's own source is
+# not import-from-derivation.
 {
   lib,
   craneLib,
@@ -14,9 +15,12 @@
   dbus,
 }:
 let
+  # The source's store hash stands in for the commit, which would change
+  # with every commit to the repository, Rust or not.
+  srcHash = builtins.unsafeDiscardStringContext (builtins.substring 0 32 (baseNameOf (toString src)));
   commonArgs = {
     pname = "haxo-rs";
-    version = "0-unstable-${src.lastModifiedDate or "unknown"}";
+    version = "0-unstable-${builtins.substring 0 7 srcHash}";
     inherit src;
     strictDeps = true;
 
@@ -27,9 +31,9 @@ let
 
     # build.rs asks vergen for git metadata; the source has no .git, so
     # vergen falls back to placeholders unless these are set. `--version`
-    # prints the describe string.
-    VERGEN_GIT_DESCRIBE = builtins.substring 0 7 (src.rev or "unknown");
-    VERGEN_GIT_SHA = src.rev or "unknown";
+    # prints the describe string: the source hash, as in the version.
+    VERGEN_GIT_DESCRIBE = "src-${builtins.substring 0 7 srcHash}";
+    VERGEN_GIT_SHA = srcHash;
 
     nativeBuildInputs = [ pkg-config ];
     buildInputs = [
@@ -46,8 +50,8 @@ craneLib.buildPackage (
   commonArgs
   // {
     # The dependencies depend on Cargo.toml and Cargo.lock only. Without
-    # the commit's date (in the version) and hash (vergen's), every new
-    # fork commit would rebuild all of them under emulation.
+    # the source hash (in the version and vergen's), every change to the
+    # Rust source would rebuild all of them under emulation.
     cargoArtifacts = craneLib.buildDepsOnly (
       builtins.removeAttrs commonArgs [
         "VERGEN_GIT_DESCRIBE"

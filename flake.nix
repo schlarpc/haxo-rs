@@ -1,5 +1,5 @@
 {
-  description = "NixOS for the Haxophone (Raspberry Pi Zero 2 W)";
+  description = "The Haxophone: its firmware, and the NixOS that runs it on a Raspberry Pi Zero 2 W";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
@@ -11,17 +11,10 @@
     };
     preservation.url = "github:nix-community/preservation";
     deploy-rs.url = "github:serokell/deploy-rs";
-    # Rust builds (packages/haxo-rs). crane vendors dependencies straight
-    # from Cargo.lock, git dependencies included, so there is no cargoHash to
-    # re-prefetch on every bump.
+    # Rust builds (nix/packages/haxo-rs). crane vendors dependencies
+    # straight from Cargo.lock, git dependencies included, so there is no
+    # cargoHash to re-prefetch on every change.
     crane.url = "github:ipetkov/crane";
-    # The Haxophone firmware (docs/haxophone.md): our fork of
-    # cardonabits/haxo-rs, where our changes are commits. Source-only, so
-    # `nix flake update haxo-rs` picks up what's pushed to its main.
-    haxo-rs = {
-      url = "github:schlarpc/haxo-rs";
-      flake = false;
-    };
   };
 
   outputs =
@@ -73,10 +66,32 @@
         }).deploy-rs.lib;
 
       haxophone = self.nixosConfigurations.haxophone;
+
+      # The Rust workspace and the files haxo001 installs, and nothing else:
+      # the packages' source, so a change to the NixOS modules, the docs or
+      # the flake rebuilds none of them.
+      rustSrc = lib.fileset.toSource {
+        root = ./.;
+        fileset = lib.fileset.unions [
+          ./Cargo.toml
+          ./Cargo.lock
+          ./build.rs
+          ./src
+          ./crates
+          ./notemap.json
+          ./midi/startup/Startup_Haxophone.mid
+        ];
+      };
     in
     {
+      # haxo-rs, haxo-web, haxo-bridge, umtprd and haxophone-config.
+      overlays.default = import ./nix/overlay.nix {
+        inherit (inputs) crane;
+        src = rustSrc;
+      };
+
       nixosConfigurations.haxophone = lib.nixosSystem {
-        modules = [ ./nixos/configuration.nix ];
+        modules = [ ./nix/nixos/configuration.nix ];
         specialArgs = { inherit inputs; };
       };
 
@@ -94,29 +109,28 @@
 
       checks = lib.genAttrs systems (system: (deployLib system).deployChecks self.deploy);
 
-      packages = forAllSystems (pkgs: {
-        haxo-rs = pkgs.callPackage ./packages/haxo-rs {
-          craneLib = inputs.crane.mkLib pkgs;
-          src = inputs.haxo-rs;
-        };
-        haxo-web = pkgs.callPackage ./packages/haxo-web.nix {
-          craneLib = inputs.crane.mkLib pkgs;
-          src = inputs.haxo-rs;
-        };
-        haxo-bridge = pkgs.callPackage ./packages/haxo-bridge.nix {
-          craneLib = inputs.crane.mkLib pkgs;
-          src = inputs.haxo-rs;
-        };
-        umtprd = pkgs.callPackage ./packages/umtprd.nix { };
-        haxophone-config = pkgs.callPackage ./packages/haxophone-config { };
-        mint-sd = pkgs.callPackage ./packages/mint-sd.nix {
-          disko = inputs.disko.packages.${pkgs.stdenv.hostPlatform.system}.disko;
-          diskoFile = ./nixos/disko.nix;
-          toplevel = haxophone.config.system.build.toplevel;
-          hostName = haxophone.config.networking.hostName;
-          haxophone-config = self.packages.${pkgs.stdenv.hostPlatform.system}.haxophone-config;
-        };
-      });
+      packages = forAllSystems (
+        pkgs:
+        let
+          haxoPkgs = pkgs.extend self.overlays.default;
+        in
+        {
+          inherit (haxoPkgs)
+            haxo-rs
+            haxo-web
+            haxo-bridge
+            umtprd
+            haxophone-config
+            ;
+          default = haxoPkgs.haxo-rs;
+          mint-sd = haxoPkgs.callPackage ./nix/packages/mint-sd.nix {
+            disko = inputs.disko.packages.${pkgs.stdenv.hostPlatform.system}.disko;
+            diskoFile = ./nix/nixos/disko.nix;
+            toplevel = haxophone.config.system.build.toplevel;
+            hostName = haxophone.config.networking.hostName;
+          };
+        }
+      );
 
       apps = forAllSystems (pkgs: {
         mint-sd = {
@@ -125,8 +139,10 @@
         };
       });
 
+      # cargo and the C libraries for the workspace, plus `deploy`.
       devShells = forAllSystems (pkgs: {
-        default = pkgs.mkShellNoCC {
+        default = pkgs.mkShell {
+          inputsFrom = [ self.packages.${pkgs.stdenv.hostPlatform.system}.haxo-rs ];
           nativeBuildInputs = [
             (deployRsPackage pkgs)
           ];

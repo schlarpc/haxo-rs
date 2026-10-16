@@ -21,16 +21,11 @@
 {
   lib,
   pkgs,
-  inputs,
   haxo,
   ...
 }:
 let
-  haxo-web = pkgs.callPackage ../packages/haxo-web.nix {
-    craneLib = inputs.crane.mkLib pkgs;
-    src = inputs.haxo-rs;
-  };
-  haxophone-config = pkgs.callPackage ../packages/haxophone-config { };
+  inherit (pkgs) haxo-web haxophone-config;
   settingsSocket = "/run/haxophone-config/settings.sock";
 
   iwdPolicy = pkgs.writeTextDir "share/dbus-1/system.d/haxo-web-iwd.conf" ''

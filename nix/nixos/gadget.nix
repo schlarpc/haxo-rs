@@ -38,7 +38,7 @@
   ...
 }:
 let
-  umtprd = pkgs.callPackage ../packages/umtprd.nix { };
+  inherit (pkgs) umtprd;
 
   gadget = "/sys/kernel/config/usb_gadget/haxophone";
   ffsMount = "/dev/ffs-mtp";

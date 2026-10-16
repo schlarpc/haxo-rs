@@ -11,7 +11,7 @@
                                   [--transpose N] [--volume N] [--config PATH]
   haxophone-config serve [--config PATH] [--apply-unit UNIT] [--lock FILE]
 
-`apply` runs at boot (nixos/config-file.nix): it writes iwd's network files
+`apply` runs at boot (nix/nixos/config-file.nix): it writes iwd's network files
 and the haxophone user's authorized_keys from the settings file, and puts a
 commented template in place when there is none. `check` validates a file
 without applying it (mint-sd uses it). `template` prints the template,
@@ -25,7 +25,7 @@ replaces the file.
 
 `serve` answers one JSON request on stdin with one JSON line on stdout:
 the web UI's way in, as a socket-activated service running as root, so
-the web server itself needn't be (nixos/webui.nix). It always edits the
+the web server itself needn't be (nix/nixos/webui.nix). It always edits the
 --config it was started with, and the web password never leaves it.
 """
 

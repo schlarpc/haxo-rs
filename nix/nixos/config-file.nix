@@ -2,7 +2,7 @@
 # TOML file on the FAT boot partition, config/haxophone.toml, editable from
 # any computer with the card in a reader. It holds the ssh keys that may log
 # in as `haxophone` and the Wi-Fi networks to join (format and template in
-# packages/haxophone-config).
+# nix/packages/haxophone-config).
 #
 # A oneshot applies it at every boot: iwd's network files into /var/lib/iwd,
 # the keys into /run, and haxo's instrument settings into an environment
@@ -18,7 +18,7 @@
   ...
 }:
 let
-  haxophone-config = pkgs.callPackage ../packages/haxophone-config { };
+  inherit (pkgs) haxophone-config;
   keysDir = "/run/haxophone-config/authorized_keys";
 in
 {

@@ -13,15 +13,11 @@
 {
   lib,
   pkgs,
-  inputs,
   haxo,
   ...
 }:
 let
-  haxo-bridge = pkgs.callPackage ../packages/haxo-bridge.nix {
-    craneLib = inputs.crane.mkLib pkgs;
-    src = inputs.haxo-rs;
-  };
+  inherit (pkgs) haxo-bridge;
   bridge =
     device: extra:
     lib.concatStringsSep " " (

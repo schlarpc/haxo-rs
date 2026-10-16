@@ -1,7 +1,7 @@
-# haxo-web, the web UI's server: a second binary in the haxo-rs workspace
+# haxo-web, the web UI's server: a second binary in the workspace
 # (crates/haxo-web, with the page in ui/). Pure Rust, so no C libraries.
 #
-# `src` is the `haxo-rs` flake input, as for packages/haxo-rs.
+# `src` is the Rust workspace, as for nix/packages/haxo-rs.
 {
   lib,
   craneLib,
@@ -10,7 +10,9 @@
 let
   commonArgs = {
     pname = "haxo-web";
-    version = "0-unstable-${src.lastModifiedDate or "unknown"}";
+    version = "0-unstable-${
+      builtins.unsafeDiscardStringContext (builtins.substring 0 7 (baseNameOf (toString src)))
+    }";
     inherit src;
     strictDeps = true;
     cargoExtraArgs = "--locked -p haxo-web";
@@ -22,8 +24,8 @@ in
 craneLib.buildPackage (
   commonArgs
   // {
-    # Keyed on Cargo.toml and Cargo.lock only, not the commit (see
-    # packages/haxo-rs).
+    # Keyed on Cargo.toml and Cargo.lock only, not the source (see
+    # nix/packages/haxo-rs).
     cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { version = "0"; });
     meta = {
       description = "The Haxophone's web UI";

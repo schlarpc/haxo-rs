@@ -1,4 +1,4 @@
-# Users and Nix: what the host got from schlarpc-flake's shared modules.
+# Users and Nix.
 { ... }:
 {
   nix = {

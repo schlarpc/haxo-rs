@@ -1,5 +1,5 @@
 # Mint an SD card for the haxophone from a card reader on another machine:
-# partition and format it with disko (nixos/disko.nix), give the host its
+# partition and format it with disko (nix/nixos/disko.nix), give the host its
 # identity on /persist, install the system closure, and write the settings
 # file (config/haxophone.toml on the FAT partition). The card boots straight
 # into the configured system, with no installer step on the Pi.

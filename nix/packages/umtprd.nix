@@ -1,7 +1,7 @@
 # uMTP-Responder: an MTP device-side daemon for Linux USB gadgets
 # (FunctionFS). Built with SYSTEMD=1 so it sends READY=1 once it has written
 # its USB descriptors, which is when the gadget may be bound to the UDC; see
-# nixos/gadget.nix.
+# nix/nixos/gadget.nix.
 {
   lib,
   stdenv,
