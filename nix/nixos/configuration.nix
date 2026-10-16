@@ -50,7 +50,7 @@ in
   # haxo-rs, haxo-web, haxo-bridge and the board tools (nix/overlay.nix).
   nixpkgs.overlays = [ inputs.self.overlays.default ];
 
-  # Upstream's service (scripts/systemd/haxo.service), minus its MIDI-only
+  # Upstream's systemd unit for Raspberry Pi OS, minus its MIDI-only
   # gadget script: gadget.nix builds ours. Root for the GPIO and I2C
   # character devices and realtime priority.
   systemd.services.haxo = {

@@ -33,7 +33,7 @@ impl Pressure {
         let mut i2c = match maybe_i2c {
             Ok(i2c) => i2c,
             Err(e) => {
-                error!("Failed to initialize I2C.  Check raspi-config.");
+                error!("Failed to initialize I2C: is the HAT overlay (i2c1) loaded?");
                 return Err(Box::new(e));
             }
         };

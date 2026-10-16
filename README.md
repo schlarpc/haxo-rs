@@ -151,10 +151,3 @@ Press all the keys at least once, in any order...
 22/22: detected_keys: 8 keys: 2777377f
 test keyscan::tests::all_keys ... ok
 ```
-
-### Raspberry Pi OS
-
-Upstream's way of running haxo-rs, on Raspberry Pi OS, is still here:
-cross-compiling in `docker/`, the systemd units in `scripts/systemd/`, and
-the network setup in [docs/zero-setup.md](docs/zero-setup.md). See
-[upstream's README](https://github.com/cardonabits/haxo-rs#readme) for it.
